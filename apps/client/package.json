@@ -1,0 +1,22 @@
+{
+  "name": "@aerial-arena/client",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aerial-arena/game-core": "*",
+    "@aerial-arena/shared": "*",
+    "@dimforge/rapier3d-compat": "^0.14.0",
+    "three": "^0.172.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.172.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7"
+  }
+}

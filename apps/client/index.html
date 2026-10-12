@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aerial Arena - 3D Browser Car-Soccer</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        user-select: none;
+      }
+      body, html {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #080c14;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        color: #fff;
+      }
+      #game-canvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        z-index: 1;
+      }
+      #ui-root {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 10;
+        pointer-events: none;
+      }
+      .pointer-interactive {
+        pointer-events: auto;
+      }
+      /* UI Utility Styles */
+      .hidden {
+        display: none !important;
+      }
+      .glass-panel {
+        background: rgba(14, 22, 38, 0.85);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+        border-radius: 12px;
+      }
+      .btn {
+        background: linear-gradient(135deg, #1e3a8a, #2563eb);
+        color: #fff;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        padding: 12px 28px;
+        font-size: 16px;
+        font-weight: 700;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+      .btn:hover {
+        background: linear-gradient(135deg, #2563eb, #3b82f6);
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4);
+      }
+      .btn:active {
+        transform: translateY(0);
+      }
+      .btn-orange {
+        background: linear-gradient(135deg, #c2410c, #ea580c);
+      }
+      .btn-orange:hover {
+        background: linear-gradient(135deg, #ea580c, #f97316);
+        box-shadow: 0 6px 20px rgba(234, 88, 12, 0.4);
+      }
+      .btn-secondary {
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+      }
+      .btn-secondary:hover {
+        background: rgba(255, 255, 255, 0.2);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      }
+      .btn-danger {
+        background: linear-gradient(135deg, #991b1b, #dc2626);
+      }
+      .btn-danger:hover {
+        background: linear-gradient(135deg, #dc2626, #ef4444);
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="game-canvas"></canvas>
+    <div id="ui-root"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

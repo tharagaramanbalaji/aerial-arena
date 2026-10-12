@@ -1,0 +1,24 @@
+{
+  "name": "aerial-arena-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n \"server,client\" -c \"blue,green\" \"npm run dev -w apps/server\" \"npm run dev -w apps/client\"",
+    "dev:server": "npm run dev -w apps/server",
+    "dev:client": "npm run dev -w apps/client",
+    "build": "npm run build -w packages/shared && npm run build -w packages/game-core && npm run build -w apps/server && npm run build -w apps/client",
+    "typecheck": "npm run typecheck -w packages/shared && npm run typecheck -w packages/game-core && npm run typecheck -w apps/server && npm run typecheck -w apps/client",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:physics": "vitest run packages/game-core"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}
