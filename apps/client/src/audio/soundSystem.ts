@@ -23,6 +23,7 @@ export class SoundSystem {
       this.masterGain.gain.value = this.isMuted ? 0 : this.volume;
       this.masterGain.connect(this.ctx.destination);
       this.startEngineSound();
+      this.updateMusic();
     }
     if (this.ctx.state === 'suspended') {
       this.ctx.resume();
@@ -60,7 +61,7 @@ export class SoundSystem {
 
     this.engineOsc.type = 'sawtooth';
     this.engineOsc.frequency.value = 45; // Idle rumble
-    this.engineGain.gain.value = 0.08;
+    this.engineGain.gain.value = 0; // raised by updateEngineSpeed only during a match
 
     const filter = this.ctx.createBiquadFilter();
     filter.type = 'lowpass';
@@ -78,7 +79,91 @@ export class SoundSystem {
     const clamped = Math.max(0, Math.min(1, speedRatio));
     // Frequency shifts from 45Hz idle to 160Hz top speed
     this.engineOsc.frequency.setTargetAtTime(45 + clamped * 115, this.ctx?.currentTime || 0, 0.05);
-    this.engineGain.gain.setTargetAtTime(0.08 + clamped * 0.06, this.ctx?.currentTime || 0, 0.05);
+    // Silent outside a match: the idle drone used to buzz in the lobby.
+    const gain = this.scene === 'match' ? 0.08 + clamped * 0.06 : 0;
+    this.engineGain.gain.setTargetAtTime(gain, this.ctx?.currentTime || 0, 0.05);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lobby music: a calm synthesized loop (original, generated here; no audio files).
+  // Am - F - C - G pad chords with a soft plucked arpeggio, scheduled bar by bar.
+  // ---------------------------------------------------------------------------
+  private scene: 'menu' | 'match' = 'menu';
+  private musicGain: GainNode | null = null;
+  private musicTimer: number | null = null;
+  private nextBarTime = 0;
+  private bar = 0;
+  private static readonly BAR_SEC = 4; // 60 BPM, 4 beats per bar
+  private static readonly CHORDS = [
+    [57, 60, 64], // A minor
+    [53, 57, 60], // F major
+    [48, 55, 64], // C major
+    [55, 59, 62], // G major
+  ];
+
+  /** 'menu' plays the lobby music; 'match' fades it out and enables the engine sound. */
+  public setScene(scene: 'menu' | 'match'): void {
+    this.scene = scene;
+    this.updateMusic();
+    if (scene === 'menu') this.updateEngineSpeed(0);
+  }
+
+  private updateMusic(): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.masterGain) return;
+    if (!this.musicGain) {
+      this.musicGain = ctx.createGain();
+      this.musicGain.gain.value = 0;
+      const tone = ctx.createBiquadFilter();
+      tone.type = 'lowpass';
+      tone.frequency.value = 1800; // soft and warm, no harsh highs
+      this.musicGain.connect(tone);
+      tone.connect(this.masterGain);
+    }
+    const on = this.scene === 'menu';
+    this.musicGain.gain.setTargetAtTime(on ? 0.5 : 0, ctx.currentTime, on ? 1.2 : 0.25);
+    if (on && this.musicTimer === null) {
+      this.nextBarTime = ctx.currentTime + 0.1;
+      this.musicTimer = window.setInterval(() => this.scheduleMusic(), 250);
+      this.scheduleMusic();
+    } else if (!on && this.musicTimer !== null) {
+      // Stop scheduling once the fade-out has finished.
+      const timer = this.musicTimer;
+      this.musicTimer = null;
+      window.setTimeout(() => window.clearInterval(timer), 1500);
+    }
+  }
+
+  /** Look-ahead scheduler: queue any bar that starts within the next second. */
+  private scheduleMusic(): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.musicGain || this.scene !== 'menu') return;
+    while (this.nextBarTime < ctx.currentTime + 1) {
+      const t = this.nextBarTime;
+      const chord = SoundSystem.CHORDS[this.bar % SoundSystem.CHORDS.length];
+      const len = SoundSystem.BAR_SEC;
+      for (const n of chord) this.note(n, t, len + 0.6, 0.045, 'triangle', 1.2); // pad
+      this.note(chord[0] - 12, t, len, 0.06, 'sine', 0.3); // bass
+      const arp = [chord[0], chord[1], chord[2], chord[1] + 12, chord[2], chord[1], chord[0] + 12, chord[2]];
+      arp.forEach((n, i) => this.note(n + 12, t + (i * len) / 8, 0.9, 0.025, 'sine', 0.01)); // pluck
+      this.nextBarTime += len;
+      this.bar++;
+    }
+  }
+
+  private note(midi: number, start: number, dur: number, peak: number, type: OscillatorType, attack: number): void {
+    const ctx = this.ctx!;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = type;
+    osc.frequency.value = 440 * Math.pow(2, (midi - 69) / 12);
+    g.gain.setValueAtTime(0, start);
+    g.gain.linearRampToValueAtTime(peak, start + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, start + dur); // smooth release, no clicks
+    osc.connect(g);
+    g.connect(this.musicGain!);
+    osc.start(start);
+    osc.stop(start + dur + 0.05);
   }
 
   public setBoosting(boosting: boolean): void {

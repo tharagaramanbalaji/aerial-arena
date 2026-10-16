@@ -252,6 +252,10 @@ class GameApp {
       this.auth.showCard(this.state === 'landing');
     });
     this.sound.setVolume(settings.get().volume);
+    // Browsers only allow audio after a user gesture: start the lobby music on the first click/key.
+    const unlockAudio = () => this.sound.enableAudio();
+    window.addEventListener('pointerdown', unlockAudio, { once: true });
+    window.addEventListener('keydown', unlockAudio, { once: true });
     settings.subscribe(() => {
       if (this.garageOpen) this.buildShowcase();
     });
@@ -353,6 +357,7 @@ class GameApp {
     this.state = 'free_play';
     this.ui.showLoading(false);
     this.ui.showGameHUD(true, 'blue');
+    this.sound.setScene('match');
     this.auth.showCard(false);
   }
 
@@ -366,6 +371,7 @@ class GameApp {
     this.net.snapshots.clear();
     this.cameraManager.snap();
     this.ui.showGameHUD(false, team);
+    this.sound.setScene('match');
     this.auth.showCard(false);
   }
 
@@ -386,7 +392,7 @@ class GameApp {
     this.clearCars();
     this.effects.clear();
     this.sound.setBoosting(false);
-    this.sound.updateEngineSpeed(0);
+    this.sound.setScene('menu');
     if (this.arena.theme !== this.theme) this.loadArena(this.theme);
     this.ui.showLanding();
     this.auth.showCard(true);
@@ -522,6 +528,7 @@ class GameApp {
     this.state = 'bot_match';
     this.ui.showLoading(false);
     this.ui.showGameHUD(false, 'blue');
+    this.sound.setScene('match');
     this.auth.showCard(false);
   }
 
