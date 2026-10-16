@@ -1,12 +1,17 @@
-# Render Blueprint: one web service running the Dockerfile (game client + match server +
-# player database). Render provides PORT and supports WebSockets on all plans.
+# Render Blueprint: one web service running the Dockerfile (game client + match server).
+# Render provides PORT and supports WebSockets on all plans.
 #
-# Deploy: push this repo to GitHub, then in Render choose New + -> Blueprint -> pick the repo.
+# Player accounts live in a free Neon Postgres database (DATABASE_URL), so they survive the
+# free plan's restarts and redeploys. Without DATABASE_URL the server falls back to a local
+# SQLite file, which the free plan wipes on every restart.
+#
+# Deploy: in Render choose New + -> Blueprint -> pick this repo, then paste your Neon
+# connection string when Render asks for DATABASE_URL.
 services:
   - type: web
     name: aerial-arena
     runtime: docker
-    plan: free # free: sleeps after ~15 min idle; disk is wiped on every deploy/restart
+    plan: free # sleeps after ~15 min idle; first visit after that takes ~30-60 s to wake
     healthCheckPath: /health
     autoDeploy: true
     envVars:
@@ -14,10 +19,5 @@ services:
         value: production
       - key: DATA_DIR
         value: /app/data
-    # To KEEP player accounts and stats across deploys/restarts, switch to a paid instance
-    # with a persistent disk (delete the "plan: free" line above and uncomment these):
-    # plan: starter
-    # disk:
-    #   name: aerial-arena-data
-    #   mountPath: /app/data
-    #   sizeGB: 1
+      - key: DATABASE_URL
+        sync: false # secret: entered in the Render dashboard, never committed

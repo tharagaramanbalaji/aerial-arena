@@ -12,13 +12,16 @@
     "@aerial-arena/game-core": "*",
     "@aerial-arena/shared": "*",
     "@dimforge/rapier3d-compat": "^0.14.0",
+    "pg": "^8.23.1",
     "sql.js": "^1.15.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.7",
+    "@types/pg": "^8.23.1",
     "@types/sql.js": "^1.4.11",
     "@types/ws": "^8.5.14",
+    "pg-mem": "^3.0.14",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   }

@@ -25,8 +25,13 @@ export function createServer(port = 3001, host = '0.0.0.0', store?: PlayerStore)
   const socketUser: Map<string, AuthUser> = new Map(); // logged-in identity per socket
 
   /** Resolve the player's identity: logged-in username, or a guest name. */
-  const identify = (socketId: string, authToken?: string, fallback?: string): string => {
-    const user = store?.userForToken(authToken) ?? null;
+  const identify = async (socketId: string, authToken?: string, fallback?: string): Promise<string> => {
+    let user: AuthUser | null = null;
+    try {
+      user = store && authToken ? await store.userForToken(authToken) : null;
+    } catch (err) {
+      console.error('[accounts] token lookup failed; continuing as guest', err);
+    }
     if (user) {
       socketUser.set(socketId, user);
       return user.username;
@@ -90,7 +95,9 @@ export function createServer(port = 3001, host = '0.0.0.0', store?: PlayerStore)
           if (!a.user) continue;
           const mine = a.team === 'blue' ? blueScore : orangeScore;
           const theirs = a.team === 'blue' ? orangeScore : blueScore;
-          store.recordMatch(a.user.id, { won: a.team === winTeam, goalsFor: mine, goalsAgainst: theirs, vsBot: false });
+          store
+            .recordMatch(a.user.id, { won: a.team === winTeam, goalsFor: mine, goalsAgainst: theirs, vsBot: false })
+            .catch((err) => console.error('[accounts] failed to record match', err));
         }
       }
     );
@@ -199,33 +206,36 @@ export function createServer(port = 3001, host = '0.0.0.0', store?: PlayerStore)
         const body = await readJson(req);
         const username = String(body.username ?? '').trim();
         const password = String(body.password ?? '');
-        const r = route === 'register' ? store.register(username, password) : store.login(username, password);
+        const r = route === 'register' ? await store.register(username, password) : await store.login(username, password);
         if (!r.ok) return json(res, route === 'login' ? 401 : 400, { error: r.error });
-        return json(res, 200, { token: r.token, profile: store.profile(r.user.id) });
+        return json(res, 200, { token: r.token, profile: await store.profile(r.user.id) });
       }
       if (req.method === 'POST' && route === 'logout') {
         const t = bearer(req);
-        if (t) store.logout(t);
+        if (t) await store.logout(t);
         return json(res, 200, { ok: true });
       }
       if (req.method === 'GET' && route === 'me') {
-        const user = store.userForToken(bearer(req));
+        const user = await store.userForToken(bearer(req));
         if (!user) return json(res, 401, { error: 'Not logged in' });
-        return json(res, 200, { profile: store.profile(user.id) });
+        return json(res, 200, { profile: await store.profile(user.id) });
       }
       if (req.method === 'GET' && route === 'leaderboard') {
-        return json(res, 200, { players: store.leaderboard(10) });
+        return json(res, 200, { players: await store.leaderboard(10) });
       }
       if (req.method === 'POST' && route === 'bot-result') {
-        const user = store.userForToken(bearer(req));
+        const user = await store.userForToken(bearer(req));
         if (!user) return json(res, 401, { error: 'Not logged in' });
         const body = await readJson(req);
-        store.recordMatch(user.id, { won: body.won === true, goalsFor: Number(body.goalsFor), goalsAgainst: Number(body.goalsAgainst), vsBot: true });
-        return json(res, 200, { profile: store.profile(user.id) });
+        await store.recordMatch(user.id, { won: body.won === true, goalsFor: Number(body.goalsFor), goalsAgainst: Number(body.goalsAgainst), vsBot: true });
+        return json(res, 200, { profile: await store.profile(user.id) });
       }
       return json(res, 404, { error: 'Unknown endpoint' });
     } catch (err) {
-      return json(res, 400, { error: err instanceof Error ? err.message : 'Bad request' });
+      const msg = err instanceof Error ? err.message : '';
+      if (msg === 'Request too large' || msg === 'Invalid JSON') return json(res, 400, { error: msg });
+      console.error('[accounts] API error', err);
+      return json(res, 500, { error: 'Server error, try again' }); // never leak database details
     }
   };
 
@@ -283,12 +293,13 @@ export function createServer(port = 3001, host = '0.0.0.0', store?: PlayerStore)
           }
 
           case 'queue/join': {
+            const name = await identify(socketId, msg.authToken, msg.playerName);
             if (socketToRoom.has(socketId) || codeBySocket.has(socketId)) {
               send({ type: 'error', message: 'Already in a match or hosting a private room', code: 'BUSY' });
               break;
             }
             try {
-              const res = matchmaker.join(socketId, identify(socketId, msg.authToken, msg.playerName));
+              const res = matchmaker.join(socketId, name);
               if (res.pair) {
                 await startMatch(res.pair);
               } else {
@@ -314,6 +325,7 @@ export function createServer(port = 3001, host = '0.0.0.0', store?: PlayerStore)
           }
 
           case 'room/create': {
+            const hostName = await identify(socketId, msg.authToken, msg.playerName);
             if (socketToRoom.has(socketId)) {
               send({ type: 'error', message: 'Already in a match', code: 'BUSY' });
               break;
@@ -324,7 +336,6 @@ export function createServer(port = 3001, host = '0.0.0.0', store?: PlayerStore)
             if (existing) removePrivateRoom(existing);
             const code = newRoomCode();
             const theme = msg.theme && THEMES.includes(msg.theme) ? msg.theme : THEMES[crypto.randomInt(THEMES.length)];
-            const hostName = identify(socketId, msg.authToken, msg.playerName);
             privateRooms.set(code, { code, hostSocketId: socketId, hostName, theme, createdAt: Date.now() });
             codeBySocket.set(socketId, code);
             send({ type: 'room/created', code, expiresInSec: PRIVATE_ROOM_TTL_MS / 1000 });
@@ -332,6 +343,7 @@ export function createServer(port = 3001, host = '0.0.0.0', store?: PlayerStore)
           }
 
           case 'room/join': {
+            const guestName = await identify(socketId, msg.authToken, msg.playerName);
             sweepExpiredRooms();
             const code = String(msg.code ?? '').trim().toUpperCase();
             const pr = privateRooms.get(code);
@@ -358,7 +370,7 @@ export function createServer(port = 3001, host = '0.0.0.0', store?: PlayerStore)
               roomId: crypto.randomUUID(),
               theme: pr.theme,
               player1: { socketId: pr.hostSocketId, ticketId: `private-${code}-host`, playerName: pr.hostName, team: 'blue', token: crypto.randomUUID() },
-              player2: { socketId, ticketId: `private-${code}-guest`, playerName: identify(socketId, msg.authToken, msg.playerName), team: 'orange', token: crypto.randomUUID() },
+              player2: { socketId, ticketId: `private-${code}-guest`, playerName: guestName, team: 'orange', token: crypto.randomUUID() },
             };
             await startMatch(pair);
             break;

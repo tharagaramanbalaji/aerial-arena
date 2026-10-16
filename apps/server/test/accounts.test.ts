@@ -3,49 +3,72 @@ import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
-import { PlayerStore } from '../src/db.js';
+import { newDb } from 'pg-mem';
+import { PlayerStore, PostgresPlayerStore, SqlitePlayerStore } from '../src/db.js';
 import { createServer, ServerInstance } from '../src/server.js';
 
-describe('PlayerStore (SQLite)', () => {
+// The same contract runs against both backends: SQLite (local) and Postgres (Neon; pg-mem here).
+const backends: [string, () => Promise<PlayerStore>][] = [
+  ['SQLite', () => SqlitePlayerStore.open(null)],
+  ['Postgres', () => PostgresPlayerStore.withPool(new (newDb().adapters.createPg().Pool)())],
+];
+
+describe.each(backends)('PlayerStore (%s)', (_name, openStore) => {
   it('registers, rejects bad input and duplicates, logs in, and tracks sessions', async () => {
-    const store = await PlayerStore.open(null);
-    expect(store.register('ab', 'secret1')).toMatchObject({ ok: false });
-    expect(store.register('bad name!', 'secret1')).toMatchObject({ ok: false });
-    expect(store.register('Rocket_1', '123')).toMatchObject({ ok: false });
-    const r = store.register('Rocket_1', 'secret1');
+    const store = await openStore();
+    expect(await store.register('ab', 'secret1')).toMatchObject({ ok: false });
+    expect(await store.register('bad name!', 'secret1')).toMatchObject({ ok: false });
+    expect(await store.register('Rocket_1', '123')).toMatchObject({ ok: false });
+    const r = await store.register('Rocket_1', 'secret1');
     expect(r.ok).toBe(true);
-    expect(store.register('rocket_1', 'another1')).toMatchObject({ ok: false, error: 'That username is taken' });
-    expect(store.login('Rocket_1', 'wrong')).toMatchObject({ ok: false });
-    const l = store.login('ROCKET_1', 'secret1');
+    expect(await store.register('rocket_1', 'another1')).toMatchObject({ ok: false, error: 'That username is taken' });
+    expect(await store.login('Rocket_1', 'wrong')).toMatchObject({ ok: false });
+    expect(await store.login('nobody', 'secret1')).toMatchObject({ ok: false, error: 'Wrong username or password' });
+    const l = await store.login('ROCKET_1', 'secret1');
     expect(l.ok).toBe(true);
     if (!l.ok || !r.ok) return;
-    expect(store.userForToken(l.token)?.username).toBe('Rocket_1');
-    store.logout(l.token);
-    expect(store.userForToken(l.token)).toBeNull();
-    expect(store.userForToken(r.token)?.username).toBe('Rocket_1'); // other session still valid
-    expect(store.userForToken('forged')).toBeNull();
+    expect((await store.userForToken(l.token))?.username).toBe('Rocket_1');
+    await store.logout(l.token);
+    expect(await store.userForToken(l.token)).toBeNull();
+    expect((await store.userForToken(r.token))?.username).toBe('Rocket_1'); // other session still valid
+    expect(await store.userForToken('forged')).toBeNull();
+    await store.close();
   });
 
-  it('records online and bot results, builds a leaderboard, and persists to disk', async () => {
-    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-db-')), 'test.sqlite');
-    const store = await PlayerStore.open(file);
-    const a = store.register('alpha', 'secret1');
-    const b = store.register('bravo', 'secret1');
+  it('records online and bot results and builds a leaderboard', async () => {
+    const store = await openStore();
+    const a = await store.register('alpha', 'secret1');
+    const b = await store.register('bravo', 'secret1');
     if (!a.ok || !b.ok) throw new Error('register failed');
-    store.recordMatch(a.user.id, { won: true, goalsFor: 3, goalsAgainst: 1, vsBot: false });
-    store.recordMatch(b.user.id, { won: false, goalsFor: 1, goalsAgainst: 3, vsBot: false });
-    store.recordMatch(b.user.id, { won: true, goalsFor: 2, goalsAgainst: 0, vsBot: true });
-    expect(store.profile(a.user.id)).toMatchObject({ matches: 1, wins: 1, losses: 0, goalsFor: 3, goalsAgainst: 1 });
-    expect(store.profile(b.user.id)).toMatchObject({ matches: 1, wins: 0, losses: 1, botMatches: 1, botWins: 1 });
-    expect(store.leaderboard().map((p) => p.username)).toEqual(['alpha', 'bravo']);
-
-    const reopened = await PlayerStore.open(file); // simulates a server restart
-    expect(reopened.profile(a.user.id)).toMatchObject({ username: 'alpha', wins: 1 });
-    expect(reopened.userForToken(a.token)?.username).toBe('alpha');
+    await store.recordMatch(a.user.id, { won: true, goalsFor: 3, goalsAgainst: 1, vsBot: false });
+    await store.recordMatch(b.user.id, { won: false, goalsFor: 1, goalsAgainst: 3, vsBot: false });
+    await store.recordMatch(b.user.id, { won: true, goalsFor: 2, goalsAgainst: 0, vsBot: true });
+    expect(await store.profile(a.user.id)).toMatchObject({ username: 'alpha', matches: 1, wins: 1, losses: 0, goalsFor: 3, goalsAgainst: 1 });
+    expect(await store.profile(b.user.id)).toMatchObject({ matches: 1, wins: 0, losses: 1, botMatches: 1, botWins: 1 });
+    expect(typeof (await store.profile(a.user.id))!.createdAt).toBe('number');
+    expect(await store.leaderboard()).toEqual([
+      { username: 'alpha', wins: 1, losses: 0, matches: 1 },
+      { username: 'bravo', wins: 0, losses: 1, matches: 1 },
+    ]);
+    expect(await store.profile(9999)).toBeNull();
+    await store.close();
   });
 });
 
-describe('Accounts HTTP API + identity in matches', () => {
+describe('SQLite persistence', () => {
+  it('keeps accounts and sessions across a restart', async () => {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'aa-db-')), 'test.sqlite');
+    const store = await SqlitePlayerStore.open(file);
+    const a = await store.register('alpha', 'secret1');
+    if (!a.ok) throw new Error('register failed');
+    await store.recordMatch(a.user.id, { won: true, goalsFor: 3, goalsAgainst: 1, vsBot: false });
+    const reopened = await SqlitePlayerStore.open(file); // simulates a server restart
+    expect(await reopened.profile(a.user.id)).toMatchObject({ username: 'alpha', wins: 1 });
+    expect((await reopened.userForToken(a.token))?.username).toBe('alpha');
+  });
+});
+
+describe.each(backends)('Accounts HTTP API + identity in matches (%s)', (_name, openStore) => {
   let server: ServerInstance | undefined;
   afterEach(async () => {
     await server?.close();
@@ -53,7 +76,7 @@ describe('Accounts HTTP API + identity in matches', () => {
   });
 
   async function start() {
-    const store = await PlayerStore.open(null);
+    const store = await openStore();
     server = createServer(0, '127.0.0.1', store);
     await new Promise<void>((r) => server!.httpServer.listen(0, '127.0.0.1', r));
     const addr = server.httpServer.address();

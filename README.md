@@ -197,23 +197,33 @@ docker build -t aerial-arena .
 docker run -p 8080:8080 aerial-arena   # then open http://localhost:8080
 ```
 
-### Hosting on Render (easiest)
-`render.yaml` sets everything up: Docker build, `/health` check, and the database folder.
-1. Create a GitHub repository and push this project to it.
-2. Go to [render.com](https://render.com), sign up with GitHub, then choose **New + → Blueprint** and select the repo.
+### Hosting on Render + Neon (free, accounts persist)
+The game runs on Render; player accounts live in a free [Neon](https://neon.tech) Postgres database, so they survive Render's restarts.
+
+**1. Create the database (Neon)**
+1. Sign up at [neon.tech](https://neon.tech) and create a project (any name; pick the region closest to your Render region).
+2. On the project dashboard click **Connect**, keep **Connection pooling** on, and copy the connection string (`postgresql://...neon.tech/neondb?sslmode=require...`). It contains a password, so don't commit or share it.
+
+The server creates its tables on first start; there is nothing to run in Neon.
+
+**2. Deploy the game (Render)**
+1. Go to [render.com](https://render.com), sign up with GitHub, then choose **New + → Blueprint** and select this repo.
+2. Render reads `render.yaml` and asks for **DATABASE_URL**. Paste the Neon connection string.
 3. Click **Apply**. Render builds the Dockerfile and gives you a URL like `https://aerial-arena.onrender.com`. Share it; invite links work there too.
+4. Check the deploy log for `Player database: Postgres (DATABASE_URL)`.
+
+To change the database later: Render dashboard → the service → **Environment** → edit `DATABASE_URL` → Save (it redeploys).
 
 **Free plan limits:**
-- The service sleeps after about 15 minutes idle; the first visit then takes about a minute.
-- The disk is wiped on every deploy or restart, so **accounts and stats reset**.
+- Render sleeps the service after about 15 minutes idle; the first visit then takes about a minute.
+- Neon suspends the database when idle; the first login after that takes a second or two longer.
+- Without `DATABASE_URL`, the server falls back to SQLite on Render's disk, which is wiped on every restart.
 
-To keep player data, switch to a paid instance with a persistent disk (see the commented lines in `render.yaml`).
-
-Other hosts work too, if they support long-lived WebSockets and a persistent process (Railway, Fly.io, a VPS). Point them at the `Dockerfile` and set `DATA_DIR` to a persistent volume. Static/serverless hosts (Vercel, Netlify, GitHub Pages) cannot run the match server.
+Other hosts work too, if they support long-lived WebSockets and a persistent process (Railway, Fly.io, a VPS). Point them at the `Dockerfile` and set `DATABASE_URL` (or `DATA_DIR` on a persistent volume). Static/serverless hosts (Vercel, Netlify, GitHub Pages) cannot run the match server.
 
 ### Accounts & data
 - Players create a username and password, or continue as a guest.
-- The server stores accounts, online wins/losses/goals, and bot results in SQLite (via sql.js, no native build) at `$DATA_DIR/aerial-arena.sqlite`.
+- The server stores accounts, online wins/losses/goals, and bot results in Postgres when `DATABASE_URL` is set (Neon in production), otherwise in SQLite (via sql.js, no native build) at `$DATA_DIR/aerial-arena.sqlite` for local development.
 - Passwords are hashed with scrypt; sessions are random tokens stored as hashes.
 - Online results are recorded by the server. Bot results are reported by the client, so they don't count toward the leaderboard.
 - Run a **single instance**: matches, rooms and the database live in that one process.
