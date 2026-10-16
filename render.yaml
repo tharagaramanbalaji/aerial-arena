@@ -1,0 +1,23 @@
+# Render Blueprint: one web service running the Dockerfile (game client + match server +
+# player database). Render provides PORT and supports WebSockets on all plans.
+#
+# Deploy: push this repo to GitHub, then in Render choose New + -> Blueprint -> pick the repo.
+services:
+  - type: web
+    name: aerial-arena
+    runtime: docker
+    plan: free # free: sleeps after ~15 min idle; disk is wiped on every deploy/restart
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR
+        value: /app/data
+    # To KEEP player accounts and stats across deploys/restarts, switch to a paid instance
+    # with a persistent disk (delete the "plan: free" line above and uncomment these):
+    # plan: starter
+    # disk:
+    #   name: aerial-arena-data
+    #   mountPath: /app/data
+    #   sizeGB: 1

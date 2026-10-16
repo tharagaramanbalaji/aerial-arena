@@ -14,7 +14,10 @@
     "typecheck": "npm run typecheck -w packages/shared && npm run typecheck -w packages/game-core && npm run typecheck -w apps/server && npm run typecheck -w apps/client",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:physics": "vitest run packages/game-core"
+    "test:physics": "vitest run packages/game-core",
+    "probe:physics": "tsx packages/game-core/scripts/physicsProbe.ts",
+    "start": "npm run start -w apps/server",
+    "build:client": "npm run build -w apps/client"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

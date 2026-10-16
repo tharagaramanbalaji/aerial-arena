@@ -1,3 +1,4 @@
+export * from './arenaGeometry.js';
 export * from './arena.js';
 export * from './ball.js';
 export * from './car.js';

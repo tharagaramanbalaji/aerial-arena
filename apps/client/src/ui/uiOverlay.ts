@@ -1,440 +1,468 @@
+import { ArenaTheme, Team } from '@aerial-arena/shared';
 import { CameraMode } from '../camera/cameraManager.js';
-import { MatchPhase, Team } from '@aerial-arena/shared';
+import { THEMES } from '../renderer/themes.js';
+import { ActionId, keyLabel, settings } from '../settings/settingsStore.js';
+import { BoostGauge } from './boostGauge.js';
+import { SettingsPanel } from './settingsPanel.js';
+import { GaragePanel } from './garagePanel.js';
 
 export interface UIEventHandlers {
   onPlayQuickMatch: () => void;
   onPlayFreePlay: () => void;
+  onPlayBot: () => void;
+  onCreateRoom: () => void;
+  onJoinRoom: (code: string) => void;
+  onCancelRoom: () => void;
+  onGarage: (open: boolean) => void;
   onCancelQueue: () => void;
   onLeaveMatch: () => void;
   onPlayAgain: () => void;
   onReturnToMenu: () => void;
-  onToggleMute: () => void;
+  onToggleMute: () => boolean;
   onVolumeChange: (vol: number) => void;
-  onResetBallFreePlay?: () => void;
-  onResetCarFreePlay?: () => void;
-  onToggleUnlimitedBoostFreePlay?: () => void;
+  onThemeChange: (theme: ArenaTheme) => void;
+  onFreePlayUnlimitedBoost: (on: boolean) => void;
+  onFreePlayGoalReset: (on: boolean) => void;
+  onModalChange: (open: boolean) => void;
+  /** Capture the next key/mouse press for rebinding (null = cancelled). */
+  captureKey: (cb: (code: string | null) => void) => void;
 }
 
+/**
+ * All HTML overlays: landing menu, queue, HUD, banners and modals.
+ * The canvas stays full-viewport underneath; nothing here touches the simulation.
+ */
 export class UIOverlay {
-  private container: HTMLElement;
-  private handlers: UIEventHandlers;
+  private readonly root: HTMLElement;
+  private readonly h: UIEventHandlers;
+  private els: Record<string, HTMLElement> = {};
+  private searchStart = 0;
+  private searchTimer?: number;
+  private goalTimer?: number;
+  private toastTimer?: number;
+  private helpTimer?: number;
+  private lastCountdown = -1;
+  private theme: ArenaTheme = 'coastal_dome';
+  private localTeam: Team = 'blue';
+  private inLiveMatch = false;
+  private readonly gauge = new BoostGauge();
+  private readonly garage = new GaragePanel(() => this.setGarage(false));
+  private settingsPanel!: SettingsPanel;
 
-  // DOM Elements
-  private landingScreen!: HTMLElement;
-  private searchingScreen!: HTMLElement;
-  private hudScreen!: HTMLElement;
-  private countdownBanner!: HTMLElement;
-  private goalBanner!: HTMLElement;
-  private overtimeBanner!: HTMLElement;
-  private resultModal!: HTMLElement;
-  private pauseModal!: HTMLElement;
-  private settingsModal!: HTMLElement;
-  private disconnectBanner!: HTMLElement;
-
-  // HUD Dynamic elements
-  private blueScoreEl!: HTMLElement;
-  private orangeScoreEl!: HTMLElement;
-  private timerEl!: HTMLElement;
-  private teamBadgeEl!: HTMLElement;
-  private cameraBadgeEl!: HTMLElement;
-  private boostValEl!: HTMLElement;
-  private boostFillEl!: HTMLElement;
-  private freePlayHelpEl!: HTMLElement;
-  private searchTimerEl!: HTMLElement;
-  private searchStartTime = 0;
-  private searchInterval?: NodeJS.Timeout;
-
-  constructor(container: HTMLElement, handlers: UIEventHandlers) {
-    this.container = container;
-    this.handlers = handlers;
+  constructor(root: HTMLElement, handlers: UIEventHandlers) {
+    this.root = root;
+    this.h = handlers;
     this.render();
   }
 
   private render(): void {
-    this.container.innerHTML = `
-      <!-- 1. LANDING SCREEN -->
-      <div id="landing-screen" class="pointer-interactive" style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: radial-gradient(circle at center, rgba(15, 23, 42, 0.75) 0%, rgba(8, 12, 20, 0.95) 100%);">
-        <div style="text-align: center; margin-bottom: 40px;">
-          <h1 style="font-size: 64px; font-weight: 900; letter-spacing: 4px; text-transform: uppercase; background: linear-gradient(135deg, #38bdf8, #fb923c); -webkit-background-clip: text; -webkit-text-fill-color: transparent; text-shadow: 0 4px 30px rgba(56, 189, 248, 0.3);">
-            AERIAL ARENA
-          </h1>
-          <p style="font-size: 18px; color: #94a3b8; letter-spacing: 2px; text-transform: uppercase; margin-top: 8px;">
-            Physics-Driven 3D Browser Car-Soccer
-          </p>
-        </div>
-
-        <div class="glass-panel" style="padding: 36px 44px; display: flex; flex-direction: column; gap: 18px; width: 380px;">
-          <button id="btn-quick-match" class="btn" style="width: 100%; font-size: 18px; padding: 15px;">
-            Play Quick Match (1v1)
-          </button>
-          <button id="btn-free-play" class="btn btn-orange" style="width: 100%; font-size: 18px; padding: 15px;">
-            Solo Free Play
-          </button>
-          <button id="btn-settings" class="btn btn-secondary" style="width: 100%;">
-            Controls & Settings
-          </button>
-        </div>
-
-        <div style="margin-top: 36px; display: flex; align-items: center; gap: 10px;">
-          <div id="server-status-dot" style="width: 10px; height: 10px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 10px #22c55e;"></div>
-          <span id="server-status-text" style="font-size: 14px; color: #cbd5e1; letter-spacing: 1px;">Server Ready</span>
-        </div>
+    const themeButtons = (Object.keys(THEMES) as ArenaTheme[])
+      .map((t) => `<button data-theme="${t}" aria-pressed="${t === this.theme}">${THEMES[t].displayName}</button>`)
+      .join('');
+    this.root.innerHTML = `
+      <div id="landing" class="interactive">
+        <div class="logo">Aerial<br/>Arena</div>
+        <div class="tagline">Rocket-powered car soccer</div>
+        <nav class="menu" aria-label="Main menu">
+          <button id="btn-quick" class="btn">Quick Match <small>Online 1v1 against a real player</small></button>
+          <button id="btn-private" class="btn">Private Match <small>Create a room or join a friend with a code</small></button>
+          <button id="btn-bot" class="btn">Vs Bot <small>Full 5:00 match against an AI opponent</small></button>
+          <button id="btn-free" class="btn orange">Free Play <small>Practice alone with the ball</small></button>
+          <div class="arena-pick" role="group" aria-label="Free Play arena">${themeButtons}</div>
+          <button id="btn-garage" class="btn ghost">Garage <small>Customise rims, tires, decals and boost</small></button>
+          <button id="btn-settings" class="btn ghost">Controls &amp; Settings</button>
+        </nav>
+        <div class="status"><span id="status-dot" class="dot"></span><span id="status-text">Server is contacted when you press Quick Match</span></div>
       </div>
 
-      <!-- 2. QUEUE SEARCHING OVERLAY -->
-      <div id="searching-screen" class="pointer-interactive hidden" style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(8, 12, 20, 0.85); backdrop-filter: blur(10px);">
-        <div class="glass-panel" style="padding: 40px; text-align: center; width: 420px; display: flex; flex-direction: column; align-items: center; gap: 20px;">
-          <div style="width: 50px; height: 50px; border: 4px solid rgba(56, 189, 248, 0.2); border-top-color: #38bdf8; border-radius: 50%; animation: spin 1s linear infinite;"></div>
-          <h2 style="font-size: 24px; font-weight: 800; letter-spacing: 2px;">Searching for Opponent...</h2>
-          <p id="search-timer" style="font-size: 16px; color: #94a3b8; font-variant-numeric: tabular-nums;">Elapsed: 0:00</p>
-          <p style="font-size: 13px; color: #64748b;">1v1 Real Human Matchmaking (Zero Bots)</p>
-          <button id="btn-cancel-queue" class="btn btn-secondary" style="margin-top: 10px; width: 100%;">
-            Cancel Search
-          </button>
-        </div>
-      </div>
-
-      <!-- 3. IN-GAME HUD -->
-      <div id="hud-screen" class="hidden" style="position: absolute; inset: 0; pointer-events: none;">
-        <!-- Top Scoreboard Bar -->
-        <div style="position: absolute; top: 16px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; pointer-events: auto;">
-          <!-- Blue Score -->
-          <div style="background: rgba(30, 58, 138, 0.85); border: 2px solid #3b82f6; border-radius: 8px 0 0 8px; padding: 8px 24px; display: flex; align-items: center; gap: 12px; min-width: 110px; justify-content: center;">
-            <span style="font-size: 14px; font-weight: 800; color: #93c5fd; letter-spacing: 1px;">BLUE</span>
-            <span id="blue-score" style="font-size: 32px; font-weight: 900; color: #fff;">0</span>
-          </div>
-
-          <!-- Timer -->
-          <div style="background: rgba(15, 23, 42, 0.95); border-top: 2px solid rgba(255,255,255,0.2); border-bottom: 2px solid rgba(255,255,255,0.2); padding: 8px 28px; min-width: 110px; text-align: center;">
-            <span id="match-timer" style="font-size: 30px; font-weight: 900; font-variant-numeric: tabular-nums; color: #f8fafc; letter-spacing: 1px;">5:00</span>
-          </div>
-
-          <!-- Orange Score -->
-          <div style="background: rgba(194, 65, 12, 0.85); border: 2px solid #ea580c; border-radius: 0 8px 8px 0; padding: 8px 24px; display: flex; align-items: center; gap: 12px; min-width: 110px; justify-content: center;">
-            <span id="orange-score" style="font-size: 32px; font-weight: 900; color: #fff;">0</span>
-            <span style="font-size: 14px; font-weight: 800; color: #fed7aa; letter-spacing: 1px;">ORANGE</span>
-          </div>
-        </div>
-
-        <!-- Team Badge (Top Left) -->
-        <div id="team-badge" style="position: absolute; top: 20px; left: 24px; background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; padding: 6px 14px; font-size: 13px; font-weight: 800; letter-spacing: 1px;">
-          YOU: BLUE
-        </div>
-
-        <!-- Camera Badge (Bottom Left) -->
-        <div id="camera-badge" style="position: absolute; bottom: 24px; left: 24px; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(56, 189, 248, 0.4); border-radius: 8px; padding: 10px 18px; font-size: 14px; font-weight: 800; color: #38bdf8; letter-spacing: 1px;">
-          BALL CAM [C]
-        </div>
-
-        <!-- Free Play Shortcuts (Bottom Left above camera) -->
-        <div id="freeplay-help" class="hidden" style="position: absolute; bottom: 70px; left: 24px; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding: 12px 16px; font-size: 12px; color: #cbd5e1; display: flex; flex-direction: column; gap: 4px;">
-          <div><b style="color: #f97316;">[R]</b> Reset Ball &nbsp;|&nbsp; <b style="color: #f97316;">[Backspace]</b> Reset Car</div>
-          <div><b style="color: #f97316;">[U]</b> Unlimited Boost &nbsp;|&nbsp; <b style="color: #f97316;">[1]</b> Launch &nbsp;|&nbsp; <b style="color: #f97316;">[2]</b> Practice Shot</div>
-        </div>
-
-        <!-- Boost Gauge (Bottom Right) -->
-        <div style="position: absolute; bottom: 24px; right: 28px; display: flex; flex-direction: column; align-items: center; gap: 8px;">
-          <div style="position: relative; width: 110px; height: 110px;">
-            <svg viewBox="0 0 100 100" style="width: 100%; height: 100%; transform: rotate(-90deg);">
-              <circle cx="50" cy="50" r="42" stroke="rgba(255,255,255,0.15)" stroke-width="8" fill="none" />
-              <circle id="boost-fill-circle" cx="50" cy="50" r="42" stroke="#ea580c" stroke-width="8" fill="none" stroke-dasharray="264" stroke-dashoffset="0" stroke-linecap="round" style="transition: stroke-dashoffset 0.05s ease;" />
-            </svg>
-            <div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-              <span id="boost-val" style="font-size: 32px; font-weight: 900; color: #fff; line-height: 1;">100</span>
-              <span style="font-size: 10px; font-weight: 700; color: #fb923c; letter-spacing: 1px;">BOOST</span>
+      <div id="private" class="modal interactive hidden">
+        <div class="panel" role="dialog" aria-label="Private match">
+          <div class="title-sm">Private Match</div>
+          <div id="pm-choose" style="display:flex;flex-direction:column;gap:12px">
+            <button id="btn-create-room" class="btn">Create room <small>Get a code to share with a friend</small></button>
+            <label class="hint" for="pm-code">Or join with a code</label>
+            <div style="display:flex;gap:8px">
+              <input id="pm-code" class="code-input" maxlength="5" autocomplete="off" spellcheck="false" placeholder="ABCDE" aria-label="Room code" />
+              <button id="btn-join-room" class="btn" style="width:auto">Join</button>
             </div>
+            <div id="pm-error" class="hint" style="color:#fca5a5" role="alert"></div>
           </div>
-        </div>
-
-        <!-- Center Countdown Banner (3, 2, 1, GO!) -->
-        <div id="countdown-banner" class="hidden" style="position: absolute; top: 38%; left: 50%; transform: translate(-50%, -50%); font-size: 84px; font-weight: 900; color: #facc15; text-shadow: 0 0 40px rgba(250, 204, 21, 0.6); letter-spacing: 2px;">
-          3
-        </div>
-
-        <!-- Goal Notification Banner -->
-        <div id="goal-banner" class="hidden" style="position: absolute; top: 35%; left: 50%; transform: translate(-50%, -50%); background: linear-gradient(135deg, rgba(234, 88, 12, 0.95), rgba(220, 38, 38, 0.95)); border: 3px solid #fff; border-radius: 16px; padding: 24px 64px; text-align: center; box-shadow: 0 0 60px rgba(234, 88, 12, 0.8);">
-          <h2 style="font-size: 56px; font-weight: 900; letter-spacing: 4px; text-transform: uppercase;">GOAL!</h2>
-          <p id="goal-subtext" style="font-size: 20px; font-weight: 700; margin-top: 4px; letter-spacing: 2px;">ORANGE SCORED</p>
-        </div>
-
-        <!-- Overtime Banner -->
-        <div id="overtime-banner" class="hidden" style="position: absolute; top: 22%; left: 50%; transform: translateX(-50%); background: rgba(220, 38, 38, 0.9); border: 2px solid #fecaca; border-radius: 8px; padding: 8px 28px; font-size: 18px; font-weight: 900; letter-spacing: 2px;">
-          SUDDEN DEATH OVERTIME
-        </div>
-
-        <!-- Opponent Disconnected Banner -->
-        <div id="disconnect-banner" class="hidden" style="position: absolute; top: 80px; left: 50%; transform: translateX(-50%); background: rgba(185, 28, 28, 0.9); border: 2px solid #ef4444; border-radius: 8px; padding: 10px 24px; font-size: 14px; font-weight: 700;">
-          Opponent Disconnected &mdash; Forfeit in <span id="disconnect-countdown">10</span>s
+          <div id="pm-hosting" class="hidden" style="display:flex;flex-direction:column;gap:10px;align-items:center">
+            <div class="hint">Share this code (or the link) with your friend:</div>
+            <div id="pm-room-code" class="room-code">-----</div>
+            <button id="btn-copy-link" class="btn ghost" style="text-align:center">Copy invite link</button>
+            <div class="spinner"></div>
+            <div class="hint">Waiting for your friend to join… (code expires in 15 min)</div>
+          </div>
+          <button id="btn-private-close" class="btn ghost">Cancel</button>
         </div>
       </div>
 
-      <!-- 4. MATCH RESULT MODAL -->
-      <div id="result-modal" class="pointer-interactive hidden" style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(8, 12, 20, 0.88); backdrop-filter: blur(12px);">
-        <div class="glass-panel" style="padding: 44px; text-align: center; width: 440px; display: flex; flex-direction: column; align-items: center; gap: 20px;">
-          <h2 id="result-title" style="font-size: 52px; font-weight: 900; letter-spacing: 4px;">VICTORY</h2>
-          <p id="result-score-summary" style="font-size: 30px; font-weight: 800; color: #cbd5e1;">3 - 1</p>
-          <p id="result-reason" style="font-size: 14px; color: #94a3b8;"></p>
-          <div style="display: flex; flex-direction: column; gap: 12px; width: 100%; margin-top: 10px;">
-            <button id="btn-play-again" class="btn" style="width: 100%;">Play Again</button>
-            <button id="btn-return-menu" class="btn btn-secondary" style="width: 100%;">Return to Menu</button>
+      <div id="searching" class="modal interactive hidden">
+        <div class="panel" role="dialog" aria-label="Searching">
+          <div class="spinner"></div>
+          <div class="title-sm" style="text-align:center">Searching for opponent…</div>
+          <div id="search-time" style="text-align:center;color:var(--muted);font-variant-numeric:tabular-nums">0:00</div>
+          <button id="btn-cancel" class="btn ghost">Cancel</button>
+        </div>
+      </div>
+
+      <div id="hud" class="hidden">
+        <div id="scoreboard" class="scoreboard">
+          <div class="sb-team blue"><span id="score-blue">0</span></div>
+          <div id="clock" class="sb-clock"><span id="clock-text">5:00</span></div>
+          <div class="sb-team orange"><span id="score-orange">0</span></div>
+        </div>
+        <div id="freeplay-tag" class="freeplay-tag hidden"><span class="fp-dot"></span>Free Play<em>Training</em></div>
+        <div id="team-tag" class="team-tag hidden"></div>
+        <div id="ot-banner" class="ot-banner hidden">Overtime</div>
+        <div id="dc-banner" class="dc-banner hidden">Opponent disconnected — forfeit in <span id="dc-count">10</span>s</div>
+        <div id="toast" class="toast hidden"></div>
+        <div id="cam-tag" class="cam-tag"><span class="cam-ico"></span><span id="cam-text">Ball Cam</span></div>
+        <div id="gauge-slot"></div>
+        <div id="help" class="help hidden"><span id="help-keys"></span><br/><span id="fp-keys"></span></div>
+        <div id="countdown" class="countdown hidden">3</div>
+        <div id="goal" class="goal-banner hidden"><h2 id="goal-title">GOAL!</h2><p id="goal-sub">Blue scored</p></div>
+      </div>
+
+      <div id="result" class="modal interactive hidden">
+        <div class="panel" role="dialog" aria-label="Match result">
+          <div id="result-title" class="result-title">Victory</div>
+          <div id="result-score" class="result-score">0 - 0</div>
+          <div id="result-reason" style="text-align:center;color:var(--muted);font-size:13px"></div>
+          <button id="btn-again" class="btn">Find another match</button>
+          <button id="btn-menu" class="btn ghost">Main menu</button>
+        </div>
+      </div>
+
+      <div id="pause" class="modal interactive hidden">
+        <div class="panel" role="dialog" aria-label="Menu">
+          <div class="title-sm">Menu</div>
+          <div id="pause-note" style="font-size:12px;color:var(--muted)">The match keeps running for your opponent while this menu is open.</div>
+          <button id="btn-resume" class="btn">Resume</button>
+          <div id="fp-options" class="hidden" style="display:flex;flex-direction:column;gap:8px">
+            <label class="row">Unlimited boost <input id="opt-unlimited" type="checkbox" checked /></label>
+            <label class="row">Reset ball after a goal <input id="opt-goalreset" type="checkbox" checked /></label>
+          </div>
+          <button id="btn-pause-settings" class="btn ghost">Controls &amp; Settings</button>
+          <button id="btn-leave" class="btn danger">Leave</button>
+          <div id="leave-confirm" class="hidden" style="display:flex;flex-direction:column;gap:8px">
+            <div style="font-size:13px">Leave the live match? Your opponent wins by forfeit.</div>
+            <button id="btn-leave-yes" class="btn danger">Yes, leave match</button>
           </div>
         </div>
       </div>
 
-      <!-- 5. PAUSE / LEAVE MODAL -->
-      <div id="pause-modal" class="pointer-interactive hidden" style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(8, 12, 20, 0.85); backdrop-filter: blur(8px);">
-        <div class="glass-panel" style="padding: 36px; width: 360px; display: flex; flex-direction: column; gap: 16px;">
-          <h3 style="font-size: 24px; font-weight: 800; text-align: center; margin-bottom: 8px;">MATCH MENU</h3>
-          <button id="btn-resume" class="btn" style="width: 100%;">Resume</button>
-          <button id="btn-pause-mute" class="btn btn-secondary" style="width: 100%;">Mute Audio</button>
-          <button id="btn-leave-match" class="btn btn-danger" style="width: 100%;">Leave Match</button>
+      <div id="settings" class="modal interactive hidden">
+        <div class="panel wide" role="dialog" aria-label="Settings">
+          <div class="title-sm">Settings</div>
+          <div id="settings-slot"></div>
+          <button id="btn-settings-close" class="btn">Close</button>
         </div>
       </div>
 
-      <!-- 6. CONTROLS & SETTINGS MODAL -->
-      <div id="settings-modal" class="pointer-interactive hidden" style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(8, 12, 20, 0.9); backdrop-filter: blur(10px);">
-        <div class="glass-panel" style="padding: 36px; width: 480px; max-height: 90vh; overflow-y: auto;">
-          <h3 style="font-size: 26px; font-weight: 800; margin-bottom: 20px; text-align: center;">Controls & Settings</h3>
-
-          <div style="margin-bottom: 24px;">
-            <h4 style="font-size: 15px; font-weight: 700; color: #38bdf8; margin-bottom: 12px; text-transform: uppercase;">Keyboard Controls</h4>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px; color: #cbd5e1;">
-              <div><b>W / Up Arrow</b></div><div>Accelerate</div>
-              <div><b>S / Down Arrow</b></div><div>Brake / Reverse</div>
-              <div><b>A / D or Arrows</b></div><div>Steer / Air Yaw</div>
-              <div><b>Space</b></div><div>Jump / Dodge</div>
-              <div><b>Left Shift</b></div><div>Boost</div>
-              <div><b>Left Ctrl</b></div><div>Powerslide</div>
-              <div><b>Q / E</b></div><div>Air Roll Left / Right</div>
-              <div><b>C</b></div><div>Toggle Camera</div>
-              <div><b>R</b></div><div>Reset Ball (Free Play)</div>
-              <div><b>Esc</b></div><div>Pause Menu</div>
-            </div>
-          </div>
-
-          <div style="margin-bottom: 24px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 16px;">
-            <h4 style="font-size: 15px; font-weight: 700; color: #38bdf8; margin-bottom: 12px; text-transform: uppercase;">Audio Settings</h4>
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-              <span>Volume</span>
-              <input id="slider-volume" type="range" min="0" max="1" step="0.05" value="0.5" style="width: 160px; cursor: pointer;" />
-            </div>
-          </div>
-
-          <button id="btn-close-settings" class="btn btn-secondary" style="width: 100%;">Close</button>
-        </div>
-      </div>
+      <div id="loading" class="loading hidden">LOADING ARENA…</div>
     `;
-
-    // Query elements
-    this.landingScreen = document.getElementById('landing-screen')!;
-    this.searchingScreen = document.getElementById('searching-screen')!;
-    this.hudScreen = document.getElementById('hud-screen')!;
-    this.countdownBanner = document.getElementById('countdown-banner')!;
-    this.goalBanner = document.getElementById('goal-banner')!;
-    this.overtimeBanner = document.getElementById('overtime-banner')!;
-    this.resultModal = document.getElementById('result-modal')!;
-    this.pauseModal = document.getElementById('pause-modal')!;
-    this.settingsModal = document.getElementById('settings-modal')!;
-    this.disconnectBanner = document.getElementById('disconnect-banner')!;
-
-    this.blueScoreEl = document.getElementById('blue-score')!;
-    this.orangeScoreEl = document.getElementById('orange-score')!;
-    this.timerEl = document.getElementById('match-timer')!;
-    this.teamBadgeEl = document.getElementById('team-badge')!;
-    this.cameraBadgeEl = document.getElementById('camera-badge')!;
-    this.boostValEl = document.getElementById('boost-val')!;
-    this.boostFillEl = document.getElementById('boost-fill-circle')!;
-    this.freePlayHelpEl = document.getElementById('freeplay-help')!;
-    this.searchTimerEl = document.getElementById('search-timer')!;
-
-    this.bindEvents();
+    this.root.querySelectorAll<HTMLElement>('[id]').forEach((el) => (this.els[el.id] = el));
+    this.els['gauge-slot'].replaceWith(this.gauge.el);
+    this.settingsPanel = new SettingsPanel({
+      captureKey: (cb) => this.h.captureKey(cb),
+      onVolumeChange: (v) => this.h.onVolumeChange(v),
+      onToggleMute: () => this.h.onToggleMute(),
+    });
+    this.els['settings-slot'].replaceWith(this.settingsPanel.el);
+    this.root.appendChild(this.garage.el);
+    this.renderHelp();
+    settings.subscribe(() => this.renderHelp());
+    this.bind();
   }
 
-  private bindEvents(): void {
-    document.getElementById('btn-quick-match')?.addEventListener('click', () => {
-      this.handlers.onPlayQuickMatch();
+  private bind(): void {
+    const on = (id: string, fn: () => void) => this.els[id].addEventListener('click', fn);
+    on('btn-quick', () => this.h.onPlayQuickMatch());
+    on('btn-free', () => this.h.onPlayFreePlay());
+    on('btn-bot', () => this.h.onPlayBot());
+    on('btn-private', () => this.showPrivate());
+    on('btn-create-room', () => this.h.onCreateRoom());
+    on('btn-join-room', () => this.submitJoin());
+    on('btn-private-close', () => {
+      if (!this.els['pm-hosting'].classList.contains('hidden')) this.h.onCancelRoom();
+      this.hide('private');
     });
-
-    document.getElementById('btn-free-play')?.addEventListener('click', () => {
-      this.handlers.onPlayFreePlay();
+    on('btn-copy-link', () => {
+      const code = this.els['pm-room-code'].textContent ?? '';
+      const link = `${location.origin}${location.pathname}?room=${code}`;
+      void navigator.clipboard?.writeText(link).then(
+        () => (this.els['btn-copy-link'].textContent = 'Link copied!'),
+        () => (this.els['btn-copy-link'].textContent = link)
+      );
     });
-
-    document.getElementById('btn-settings')?.addEventListener('click', () => {
-      this.settingsModal.classList.remove('hidden');
+    (this.els['pm-code'] as HTMLInputElement).addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this.submitJoin();
     });
-
-    document.getElementById('btn-close-settings')?.addEventListener('click', () => {
-      this.settingsModal.classList.add('hidden');
+    on('btn-garage', () => this.setGarage(true));
+    on('btn-settings', () => this.openModal('settings'));
+    on('btn-pause-settings', () => this.openModal('settings'));
+    on('btn-settings-close', () => this.closeModal('settings'));
+    on('btn-cancel', () => this.h.onCancelQueue());
+    on('btn-resume', () => this.closeModal('pause'));
+    on('btn-leave', () => {
+      if (this.inLiveMatch) this.els['leave-confirm'].classList.remove('hidden');
+      else {
+        this.closeModal('pause');
+        this.h.onLeaveMatch();
+      }
     });
-
-    document.getElementById('btn-cancel-queue')?.addEventListener('click', () => {
-      this.handlers.onCancelQueue();
+    on('btn-leave-yes', () => {
+      this.closeModal('pause');
+      this.h.onLeaveMatch();
     });
-
-    document.getElementById('btn-resume')?.addEventListener('click', () => {
-      this.pauseModal.classList.add('hidden');
+    on('btn-again', () => {
+      this.closeModal('result');
+      this.h.onPlayAgain();
     });
-
-    document.getElementById('btn-pause-mute')?.addEventListener('click', () => {
-      this.handlers.onToggleMute();
+    on('btn-menu', () => {
+      this.closeModal('result');
+      this.h.onReturnToMenu();
     });
-
-    document.getElementById('btn-leave-match')?.addEventListener('click', () => {
-      this.pauseModal.classList.add('hidden');
-      this.handlers.onLeaveMatch();
-    });
-
-    document.getElementById('btn-play-again')?.addEventListener('click', () => {
-      this.resultModal.classList.add('hidden');
-      this.handlers.onPlayAgain();
-    });
-
-    document.getElementById('btn-return-menu')?.addEventListener('click', () => {
-      this.resultModal.classList.add('hidden');
-      this.handlers.onReturnToMenu();
-    });
-
-    const volSlider = document.getElementById('slider-volume') as HTMLInputElement;
-    volSlider?.addEventListener('input', (e) => {
-      const val = parseFloat((e.target as HTMLInputElement).value);
-      this.handlers.onVolumeChange(val);
-    });
+    (this.els['opt-unlimited'] as HTMLInputElement).addEventListener('change', (e) => this.h.onFreePlayUnlimitedBoost((e.target as HTMLInputElement).checked));
+    (this.els['opt-goalreset'] as HTMLInputElement).addEventListener('change', (e) => this.h.onFreePlayGoalReset((e.target as HTMLInputElement).checked));
+    this.root.querySelectorAll<HTMLButtonElement>('[data-theme]').forEach((b) =>
+      b.addEventListener('click', () => {
+        this.theme = b.dataset.theme as ArenaTheme;
+        this.root.querySelectorAll<HTMLButtonElement>('[data-theme]').forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
+        this.h.onThemeChange(this.theme);
+      })
+    );
   }
 
-  // State Transition Helpers
-  public showLanding(): void {
-    this.landingScreen.classList.remove('hidden');
-    this.searchingScreen.classList.add('hidden');
-    this.hudScreen.classList.add('hidden');
-    this.resultModal.classList.add('hidden');
-    this.pauseModal.classList.add('hidden');
+  private openModal(id: string) {
+    this.els[id].classList.remove('hidden');
+    this.h.onModalChange(true);
+  }
+
+  private closeModal(id: string) {
+    this.els[id].classList.add('hidden');
+    if (id === 'pause') this.els['leave-confirm'].classList.add('hidden');
+    const anyOpen = ['pause', 'settings', 'result'].some((m) => !this.els[m].classList.contains('hidden'));
+    this.h.onModalChange(anyOpen);
+  }
+
+  // ------------------------------------------------------------- states
+  showLanding(): void {
+    this.inLiveMatch = false;
+    this.show('landing');
+    for (const id of ['searching', 'hud', 'result', 'pause', 'loading']) this.hide(id);
     this.stopSearchTimer();
+    this.h.onModalChange(false);
   }
 
-  public showSearching(): void {
-    this.landingScreen.classList.add('hidden');
-    this.searchingScreen.classList.remove('hidden');
-    this.startSearchTimer();
-  }
-
-  public showGameHUD(isFreePlay = false, team: Team = 'blue'): void {
-    this.landingScreen.classList.add('hidden');
-    this.searchingScreen.classList.add('hidden');
-    this.hudScreen.classList.remove('hidden');
-    this.resultModal.classList.add('hidden');
-    this.stopSearchTimer();
-
-    if (isFreePlay) {
-      this.freePlayHelpEl.classList.remove('hidden');
-      this.teamBadgeEl.textContent = 'FREE PLAY';
-      this.timerEl.textContent = '∞';
-      this.blueScoreEl.parentElement!.style.display = 'none';
-      this.orangeScoreEl.parentElement!.style.display = 'none';
-    } else {
-      this.freePlayHelpEl.classList.add('hidden');
-      this.teamBadgeEl.textContent = `YOU: ${team.toUpperCase()}`;
-      this.teamBadgeEl.style.color = team === 'blue' ? '#38bdf8' : '#fb923c';
-      this.blueScoreEl.parentElement!.style.display = 'flex';
-      this.orangeScoreEl.parentElement!.style.display = 'flex';
-    }
-  }
-
-  public togglePauseMenu(): void {
-    this.pauseModal.classList.toggle('hidden');
-  }
-
-  public setCameraMode(mode: CameraMode): void {
-    this.cameraBadgeEl.textContent = mode === 'ball_cam' ? 'BALL CAM [C]' : 'CAR CAM [C]';
-    this.cameraBadgeEl.style.color = mode === 'ball_cam' ? '#38bdf8' : '#f8fafc';
-  }
-
-  public updateScore(blue: number, orange: number): void {
-    this.blueScoreEl.textContent = blue.toString();
-    this.orangeScoreEl.textContent = orange.toString();
-  }
-
-  public updateTimer(seconds: number, isOvertime = false): void {
-    if (isOvertime) {
-      this.timerEl.textContent = '+OT';
-      this.overtimeBanner.classList.remove('hidden');
+  private submitJoin(): void {
+    const input = this.els['pm-code'] as HTMLInputElement;
+    const code = input.value.trim().toUpperCase();
+    if (!/^[A-Z0-9]{5}$/.test(code)) {
+      this.privateError('Room codes are 5 letters/numbers.');
       return;
     }
-    this.overtimeBanner.classList.add('hidden');
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    this.timerEl.textContent = `${m}:${s < 10 ? '0' : ''}${s}`;
+    this.privateError('');
+    this.h.onJoinRoom(code);
   }
 
-  public updateBoost(units: number): void {
-    const rounded = Math.round(units);
-    this.boostValEl.textContent = rounded.toString();
-
-    // 264 is perimeter of circle with r=42
-    const totalCircumference = 264;
-    const offset = totalCircumference - (totalCircumference * (rounded / 100));
-    this.boostFillEl.style.strokeDashoffset = offset.toString();
+  showPrivate(prefillCode = ''): void {
+    this.show('private');
+    this.els['pm-choose'].classList.remove('hidden');
+    this.els['pm-hosting'].classList.add('hidden');
+    (this.els['pm-code'] as HTMLInputElement).value = prefillCode;
+    this.privateError('');
   }
 
-  public showCountdown(num: number): void {
-    this.countdownBanner.classList.remove('hidden');
-    this.countdownBanner.textContent = num <= 0 ? 'GO!' : num.toString();
+  showRoomCode(code: string): void {
+    this.show('private');
+    this.els['pm-choose'].classList.add('hidden');
+    this.els['pm-hosting'].classList.remove('hidden');
+    this.els['pm-room-code'].textContent = code;
+    this.els['btn-copy-link'].textContent = 'Copy invite link';
   }
 
-  public hideCountdown(): void {
-    this.countdownBanner.classList.add('hidden');
+  privateError(text: string): void {
+    this.els['pm-error'].textContent = text;
   }
 
-  public showGoal(scorer: Team): void {
-    this.goalBanner.classList.remove('hidden');
-    const subtext = document.getElementById('goal-subtext')!;
-    subtext.textContent = `${scorer.toUpperCase()} SCORED`;
-    setTimeout(() => {
-      this.goalBanner.classList.add('hidden');
-    }, 2800);
+  setGarage(open: boolean): void {
+    this.garage.show(open);
+    this.els['landing'].classList.toggle('hidden', open);
+    this.h.onGarage(open);
   }
 
-  public showResult(winner: Team | 'forfeit_blue' | 'forfeit_orange', blue: number, orange: number, reason?: string): void {
-    this.resultModal.classList.remove('hidden');
-    const title = document.getElementById('result-title')!;
-    const summary = document.getElementById('result-score-summary')!;
-    const reasonEl = document.getElementById('result-reason')!;
-
-    summary.textContent = `${blue} - ${orange}`;
-    reasonEl.textContent = reason || '';
-
-    if (winner.includes('forfeit')) {
-      title.textContent = 'MATCH FORFEIT';
-      title.style.color = '#ef4444';
-    } else {
-      title.textContent = `${winner.toUpperCase()} WINS`;
-      title.style.color = winner === 'blue' ? '#38bdf8' : '#ea580c';
-    }
+  showLoading(on: boolean): void {
+    this.els['loading'].classList.toggle('hidden', !on);
   }
 
-  public showDisconnectBanner(countdown: number): void {
-    this.disconnectBanner.classList.remove('hidden');
-    const el = document.getElementById('disconnect-countdown')!;
-    el.textContent = Math.ceil(countdown).toString();
+  showSearching(): void {
+    this.hide('landing');
+    this.show('searching');
+    this.searchStart = Date.now();
+    this.stopSearchTimer();
+    this.searchTimer = window.setInterval(() => {
+      const s = Math.floor((Date.now() - this.searchStart) / 1000);
+      this.els['search-time'].textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    }, 500);
   }
 
-  public hideDisconnectBanner(): void {
-    this.disconnectBanner.classList.add('hidden');
+  showGameHUD(isFreePlay: boolean, team: Team = 'blue'): void {
+    this.localTeam = team;
+    this.inLiveMatch = !isFreePlay;
+    this.stopSearchTimer();
+    for (const id of ['landing', 'searching', 'result', 'pause', 'private']) this.hide(id);
+    this.show('hud');
+    this.els['scoreboard'].classList.toggle('hidden', isFreePlay);
+    this.els['freeplay-tag'].classList.toggle('hidden', !isFreePlay);
+    this.els['fp-options'].classList.toggle('hidden', !isFreePlay);
+    this.els['fp-keys'].classList.toggle('hidden', !isFreePlay);
+    this.els['pause-note'].classList.toggle('hidden', isFreePlay);
+    this.showHelp(12000);
+    const tag = this.els['team-tag'];
+    tag.classList.toggle('hidden', isFreePlay);
+    tag.textContent = `YOU ARE ${team.toUpperCase()}`;
+    tag.style.borderLeft = `3px solid ${team === 'blue' ? 'var(--blue-hi)' : 'var(--orange)'}`;
+    this.updateScore(0, 0);
+    this.hideCountdown();
+    this.hide('ot-banner');
+    this.hide('dc-banner');
   }
 
-  private startSearchTimer(): void {
-    this.searchStartTime = Date.now();
-    this.searchInterval = setInterval(() => {
-      const elapsedSec = Math.floor((Date.now() - this.searchStartTime) / 1000);
-      const m = Math.floor(elapsedSec / 60);
-      const s = elapsedSec % 60;
-      this.searchTimerEl.textContent = `Elapsed: ${m}:${s < 10 ? '0' : ''}${s}`;
-    }, 1000);
+  /** Show the controls card; hide again after `ms` (0 = keep). */
+  showHelp(ms = 0): void {
+    this.show('help');
+    window.clearTimeout(this.helpTimer);
+    if (ms > 0) this.helpTimer = window.setTimeout(() => this.hide('help'), ms);
   }
 
-  private stopSearchTimer(): void {
-    if (this.searchInterval) {
-      clearInterval(this.searchInterval);
-      this.searchInterval = undefined;
-    }
+  toggleHelp(): void {
+    if (this.els['help'].classList.contains('hidden')) this.showHelp();
+    else this.hide('help');
+  }
+
+  setStatus(state: 'unknown' | 'ok' | 'bad', text: string): void {
+    this.els['status-dot'].className = `dot ${state === 'ok' ? 'ok' : state === 'bad' ? 'bad' : ''}`;
+    this.els['status-text'].textContent = text;
+  }
+
+  togglePauseMenu(): void {
+    if (this.els['pause'].classList.contains('hidden')) this.openModal('pause');
+    else this.closeModal('pause');
+  }
+
+  setCameraMode(mode: CameraMode): void {
+    const el = this.els['cam-tag'];
+    this.els['cam-text'].textContent = mode === 'ball_cam' ? 'Ball Cam' : 'Car Cam';
+    el.classList.toggle('car', mode === 'car_cam');
+  }
+
+  updateScore(blue: number, orange: number): void {
+    this.els['score-blue'].textContent = String(blue);
+    this.els['score-orange'].textContent = String(orange);
+  }
+
+  updateTimer(seconds: number, overtime = false): void {
+    const s = Math.max(0, Math.floor(seconds));
+    const txt = `${overtime ? '+' : ''}${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    if (this.els['clock-text'].textContent !== txt) this.els['clock-text'].textContent = txt;
+    this.els['clock'].classList.toggle('ot', overtime);
+    this.els['ot-banner'].classList.toggle('hidden', !overtime);
+  }
+
+  /** Boost units 0..100, car speed in m/s. */
+  updateBoost(units: number, speedMs = 0, supersonic = false): void {
+    this.gauge.update(units, speedMs, supersonic);
+  }
+
+  /** True while the settings panel waits for a key press (Esc must cancel, not close menus). */
+  get capturingKey(): boolean {
+    return this.settingsPanel.isCapturing;
+  }
+
+  private renderHelp(): void {
+    const k = (a: ActionId) => `<kbd>${keyLabel(settings.get().keybinds[a][0])}</kbd>`;
+    this.els['help-keys'].innerHTML =
+      `${k('throttle')}/${k('reverse')} drive · ${k('steerLeft')}/${k('steerRight')} steer · ${k('jump')} jump/flip · ${k('boost')} boost · ` +
+      `${k('powerslide')} slide / air roll · ${k('airRollLeft')}/${k('airRollRight')} roll · ${k('ballCam')} camera · ${k('help')} hide help`;
+    this.els['fp-keys'].innerHTML =
+      `${k('resetBall')} reset ball · ${k('resetCar')} reset car · ${k('unlimitedBoost')} unlimited boost · ` +
+      `${k('popBall')} pop ball up · ${k('lobBall')} lob to me · ${k('ballOnHood')} ball on hood`;
+  }
+
+  showCountdown(n: number): void {
+    const el = this.els['countdown'];
+    if (n === this.lastCountdown && !el.classList.contains('hidden')) return;
+    this.lastCountdown = n;
+    el.textContent = n <= 0 ? 'GO!' : String(n);
+    el.classList.remove('hidden', 'pop');
+    void el.offsetWidth;
+    el.classList.add('pop');
+  }
+
+  hideCountdown(): void {
+    this.lastCountdown = -1;
+    this.hide('countdown');
+  }
+
+  showGoal(scorer: Team): void {
+    const title = this.els['goal-title'];
+    const color = scorer === 'blue' ? '#5aa0ff' : '#ff8c2a';
+    title.textContent = 'GOAL!';
+    title.style.color = '#fff';
+    title.style.textShadow = `0 0 40px ${color}, 0 0 90px ${color}, 0 8px 0 rgba(0,0,0,0.35)`;
+    this.els['goal-sub'].textContent = `${scorer === this.localTeam && this.inLiveMatch ? 'You' : scorer === 'blue' ? 'Blue' : 'Orange'} scored`;
+    this.els['goal-sub'].style.color = color;
+    const el = this.els['goal'];
+    el.classList.remove('hidden');
+    el.style.animation = 'none';
+    void el.offsetWidth;
+    el.style.animation = '';
+    window.clearTimeout(this.goalTimer);
+    this.goalTimer = window.setTimeout(() => this.hide('goal'), 2600);
+  }
+
+  toast(text: string): void {
+    const el = this.els['toast'];
+    el.textContent = text;
+    el.classList.remove('hidden');
+    window.clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => el.classList.add('hidden'), 1600);
+  }
+
+  showResult(winner: Team | 'forfeit_blue' | 'forfeit_orange', blue: number, orange: number, reason?: string): void {
+    this.inLiveMatch = false;
+    const title = this.els['result-title'];
+    const winTeam: Team = winner === 'forfeit_blue' ? 'orange' : winner === 'forfeit_orange' ? 'blue' : (winner as Team);
+    const won = winTeam === this.localTeam;
+    title.textContent = won ? 'Victory' : 'Defeat';
+    title.style.color = won ? '#7dd3fc' : '#fca5a5';
+    this.els['result-score'].textContent = `${blue} - ${orange}`;
+    this.els['result-reason'].textContent = reason ?? (winner.startsWith('forfeit') ? 'Win by forfeit' : `${winTeam === 'blue' ? 'Blue' : 'Orange'} wins`);
+    this.openModal('result');
+  }
+
+  showDisconnectBanner(sec: number): void {
+    this.els['dc-count'].textContent = String(Math.ceil(sec));
+    this.show('dc-banner');
+  }
+
+  hideDisconnectBanner(): void {
+    this.hide('dc-banner');
+  }
+
+  private show(id: string) {
+    this.els[id].classList.remove('hidden');
+  }
+
+  private hide(id: string) {
+    this.els[id].classList.add('hidden');
+  }
+
+  private stopSearchTimer() {
+    if (this.searchTimer) window.clearInterval(this.searchTimer);
+    this.searchTimer = undefined;
   }
 }

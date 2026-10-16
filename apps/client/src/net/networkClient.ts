@@ -6,10 +6,8 @@ import {
   PlayerInput,
   ServerMessage,
   Team,
-  TransformSnapshot,
-  lerp,
-  quatSlerp,
 } from '@aerial-arena/shared';
+import { SnapshotBuffer } from './snapshotBuffer.js';
 
 export interface MatchSessionInfo {
   roomId: string;
@@ -29,19 +27,24 @@ export class NetworkClient {
   public prevSnapshot: GameSnapshot | null = null;
 
   // Snapshot buffer for interpolation (ordered by serverTime)
-  private snapshotBuffer: GameSnapshot[] = [];
+  public readonly snapshots = new SnapshotBuffer();
   public pingMs = 0;
 
   // Event callbacks
   public onQueueWaiting?: (ticketId: string, position: number) => void;
   public onQueueMatched?: (info: MatchSessionInfo) => void;
   public onQueueCancelled?: () => void;
+  /** Session token of the logged-in player (null = guest); sent with lobby messages. */
+  public authToken: string | null = null;
+  public onRoomCreated?: (code: string, expiresInSec: number) => void;
+  public onRoomCancelled?: () => void;
   public onPhaseChange?: (phase: MatchPhase, countdown?: number, timerRemaining?: number) => void;
   public onGoal?: (scorer: Team, blueScore: number, orangeScore: number) => void;
   public onResult?: (winner: Team | 'forfeit_blue' | 'forfeit_orange', blue: number, orange: number, reason?: string) => void;
   public onOpponentDisconnected?: (graceRemainingSec: number) => void;
   public onOpponentReconnected?: () => void;
   public onError?: (msg: string) => void;
+  public onSnapshot?: (snap: GameSnapshot) => void;
 
   constructor(serverUrl = 'ws://localhost:3001') {
     this.serverUrl = serverUrl;
@@ -114,6 +117,16 @@ export class NetworkClient {
         break;
       }
 
+      case 'room/created': {
+        this.onRoomCreated?.(msg.code, msg.expiresInSec);
+        break;
+      }
+
+      case 'room/cancelled': {
+        this.onRoomCancelled?.();
+        break;
+      }
+
       case 'queue/cancelled': {
         this.onQueueCancelled?.();
         break;
@@ -123,10 +136,8 @@ export class NetworkClient {
         this.prevSnapshot = this.lastSnapshot;
         this.lastSnapshot = msg.snapshot;
 
-        this.snapshotBuffer.push(msg.snapshot);
-        if (this.snapshotBuffer.length > 30) {
-          this.snapshotBuffer.shift();
-        }
+        this.snapshots.push(msg.snapshot);
+        this.onSnapshot?.(msg.snapshot);
         break;
       }
 
@@ -172,7 +183,21 @@ export class NetworkClient {
   }
 
   public joinQueue(playerName = 'Player'): void {
-    this.send({ type: 'queue/join', playerName });
+    this.send({ type: 'queue/join', playerName, authToken: this.authToken ?? undefined });
+  }
+
+  /** Host a private room; the server answers with room/created { code }. */
+  public createRoom(playerName = 'Player', theme?: ArenaTheme): void {
+    this.send({ type: 'room/create', playerName, theme, authToken: this.authToken ?? undefined });
+  }
+
+  /** Join a friend's private room by code; on success the server sends queue/matched. */
+  public joinRoom(code: string, playerName = 'Player'): void {
+    this.send({ type: 'room/join', code, playerName, authToken: this.authToken ?? undefined });
+  }
+
+  public cancelRoom(): void {
+    this.send({ type: 'room/cancel' });
   }
 
   public cancelQueue(): void {
@@ -186,38 +211,6 @@ export class NetworkClient {
   public leaveMatch(): void {
     this.send({ type: 'game/leave' });
     this.sessionInfo = null;
-  }
-
-  /**
-   * Interpolates an entity between two snapshots
-   */
-  public interpolateTransform(
-    tPrev: TransformSnapshot,
-    tNext: TransformSnapshot,
-    alpha: number
-  ): TransformSnapshot {
-    const a = Math.max(0, Math.min(1, alpha));
-    const rot = quatSlerp(
-      { x: tPrev.qx, y: tPrev.qy, z: tPrev.qz, w: tPrev.qw },
-      { x: tNext.qx, y: tNext.qy, z: tNext.qz, w: tNext.qw },
-      a
-    );
-
-    return {
-      x: lerp(tPrev.x, tNext.x, a),
-      y: lerp(tPrev.y, tNext.y, a),
-      z: lerp(tPrev.z, tNext.z, a),
-      qx: rot.x,
-      qy: rot.y,
-      qz: rot.z,
-      qw: rot.w,
-      vx: lerp(tPrev.vx, tNext.vx, a),
-      vy: lerp(tPrev.vy, tNext.vy, a),
-      vz: lerp(tPrev.vz, tNext.vz, a),
-      wx: lerp(tPrev.wx, tNext.wx, a),
-      wy: lerp(tPrev.wy, tNext.wy, a),
-      wz: lerp(tPrev.wz, tNext.wz, a),
-    };
   }
 
   public disconnect(): void {

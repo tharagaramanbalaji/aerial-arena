@@ -1,62 +1,55 @@
 # Aerial Arena
 
-Aerial Arena is an original, browser-first, physics-driven 3D car-soccer game. Inspired by the movement mechanics and flow of the car-soccer genre, it features 100% original procedural visuals, custom arcade physics, a server-authoritative 60 Hz simulation, an in-memory 1v1 matchmaking queue, dual camera rigs (Ball Cam and Car Cam), and solo Free Play.
+Aerial Arena is an original, browser-first 3D car-soccer game in the style of Rocket League. It uses RL-proportioned physics built from community-measured values (RocketSim / RLBot, converted at 1 uu = 1 cm), a server-authoritative 120 Hz simulation, real 1v1 matchmaking, Ball Cam / Car Cam, and solo Free Play. All visuals and sounds are procedural and original; no Rocket League assets are used.
 
 ---
 
 ## Features
 
-- **Authoritative Real-Time 1v1 Multiplayer**:
-  - Two human players paired via an atomic in-memory queue (no bots, no fakes).
-  - Fixed 60 Hz physics simulation on the server using Rapier 3D WASM (`@dimforge/rapier3d-compat`).
-  - 30 Hz compact sequenced snapshots with client interpolation.
-  - Reconnect grace window (10s) with session tokens and forfeit handling.
-- **Solo Free Play**:
-  - Offline-ready solo sandbox with local Rapier 3D simulation.
-  - Practice controls: reset ball (`R`), reset car (`Backspace`), toggle unlimited boost (`U`), launch ball (`1`), practice shot toward goal (`2`).
-- **Original Stylized Visuals & Three Arenas**:
-  - One original aerodynamic sports car silhouette with team-color materials (Blue sapphire vs Orange amber).
-  - 3 visually distinct procedural arenas sharing identical physical dimensions and boost pad coordinates:
-    1. **Foundry**: Industrial sports arena with warm floodlights and exposed steel trusses.
-    2. **Neon Grid**: Synthwave night arena with dark turf and cyan/magenta glowing gridlines.
-    3. **Coastal Dome**: Bright airy stadium with daylight glass dome and athletic turf.
-- **Responsive Arcade Vehicle Physics**:
-  - Speed-sensitive ground drive, reverse, and braking.
-  - Powerslide handbrake drift (`Left Ctrl`) with reduced lateral grip.
-  - Variable-height first jump (`Space` hold window).
-  - Second airborne action: Directional flip/dodge with directional inputs, or neutral double-jump.
-  - Supersonic boost propulsion (`Left Shift`) along car nose with resource depletion (100 units).
-  - 28 boost pads (6 big +100 pads, 22 small +12 pads) with authoritative cooldowns.
-  - Continuous Collision Detection (CCD) dynamic ball with realistic wall and ceiling rebounds.
-  - Swept goal-plane crossing detector with debounce.
-- **Dual Camera Rigs**:
-  - **Ball Cam**: Dynamic framing pointing toward the ball while keeping the car framed in the lower-middle foreground.
-  - **Car Cam**: Horizon-stabilized chase camera following car travel heading without nauseating rolls.
-  - Toggle key: `C`.
-- **Zero External Remote Assets**:
-  - All 3D meshes and stadium geometry are procedurally generated in Three.js.
-  - Sound effects (engine rumble, boost roar, jump whoosh, ball impacts, goal explosion, countdown beeps) are 100% procedurally synthesized in real-time via the Web Audio API.
+- **RL-style physics** (`packages/game-core`, tuned in `PHYSICS_TUNING.md`)
+  - RL scale: 1.2 m car hitbox, 0.91 m ball radius, 82 × 102 × 20 m arena, gravity −6.5 m/s², 120 Hz ticks.
+  - Throttle-torque and steer-angle curves vs speed, slip-based grip, powerslide, sticky force for wall driving.
+  - Tap/hold jump, double jump, directional dodges with RL impulses, flip cancel, RL air-control torques, air roll, 5.5 rad/s spin cap.
+  - Boost: 33.3/s drain, 0.1 s minimum tap, 33 at kickoff, 6 big + 28 small pads with cooldowns.
+  - RL car-ball "extra impulse" for punchy touches; bumps and supersonic demolitions.
+  - Curved floor-to-wall and wall-to-ceiling ramps; goal counts when the whole ball is over the line.
+- **Server-authoritative 1v1** (`apps/server`)
+  - Atomic in-memory queue (humans only), 5:00 clock, 3-2-1 kickoffs on the 5 RL spawn positions, goal pause and reset, sudden-death overtime, 10 s reconnect grace with forfeit.
+  - 30 Hz snapshots, client interpolation buffer; a stalled client (hidden tab) is treated as neutral input.
+- **Free Play**: the same simulation run locally, with training shortcuts.
+- **Visuals**
+  - Striped turf with team-tinted halves.
+  - Glass hex walls with chevron strips, glowing goal frames and nets.
+  - Crowd stands, floodlights, sky.
+  - Original Octane-proportioned car, hex-panel ball.
+  - Boost trails, supersonic streaks, goal explosions, bloom.
+  - Three themes on identical geometry: **Champions Field** (day), **Foundry Night**, **Neon Grid**.
+- **RL-style camera & HUD**: 110° FOV, 2.7 m / 1.0 m / −4° chase cam, Ball Cam & Car Cam, skewed scoreboard, circular boost meter.
 
 ---
 
 ## Controls
 
-| Key | Action | Context |
-|---|---|---|
-| **W / Up Arrow** | Accelerate | Ground & Air Pitch |
-| **S / Down Arrow** | Brake / Reverse | Ground & Air Pitch |
-| **A / D or Left / Right** | Steer (Ground) / Air Yaw | Driving & Aerials |
-| **Space** | Jump / Double Jump / Directional Dodge | Vehicle Action |
-| **Left Shift** | Boost | Continuous Acceleration |
-| **Left Ctrl** | Powerslide | Handbrake Drift |
-| **Q / E** | Air Roll Left / Right | Airborne Maneuvering |
-| **C** | Toggle Ball Cam / Car Cam | Local Camera Rig |
-| **R** | Reset Ball to Center | Solo Free Play Only |
-| **Backspace** | Reset Car to Kickoff | Solo Free Play Only |
-| **U** | Toggle Unlimited Boost | Solo Free Play Only |
-| **1** | Launch Ball Upward | Solo Free Play Only |
-| **2** | Practice Shot Toward Goal | Solo Free Play Only |
-| **Esc** | Match Menu / Settings | In-Game Pause |
+| Input | Action |
+|---|---|
+| **W / S** (↑ / ↓) | Throttle / brake & reverse · in the air: nose down / nose up |
+| **A / D** (← / →) | Steer · in the air: yaw |
+| **Space** | Jump (hold for height) · second press = double jump · second press + direction = dodge/flip |
+| **Left Shift** | Boost |
+| **Left Ctrl** | Powerslide · held in the air: A/D become air roll |
+| **Q / E** | Air roll left / right |
+| **C** | Toggle Ball Cam / Car Cam |
+| **Esc** | Menu (does not pause online matches) |
+| **H** | Show / hide the controls card |
+| **R / Backspace** | Free Play: reset ball / reset car |
+| **U** | Free Play: toggle unlimited boost |
+| **1 / 2 / 3** | Free Play: pop ball up / lob ball toward you / ball on hood |
+| **Gamepad** | RT/LT throttle, left stick steer & pitch, A jump, B boost, X powerslide/air roll, Y camera, LB/RB air roll, Start menu |
+
+All keyboard/mouse bindings can be changed in **Settings → Controls**: click a binding, then press a key or mouse button. Camera settings are in **Settings → Camera**: FOV, distance, height, angle, stiffness, swivel speed, Ball Cam max tilt, shake, and Ball Cam toggle or hold. Settings are saved in the browser.
+
+### Custom car model
+Put a `car.glb` in `apps/client/public/models/` and reload. The game fits it to the hitbox, recolors its paint per team and spins its wheels. See `apps/client/public/models/README.md` for naming rules and the optional `car.json`.
 
 ---
 
@@ -72,21 +65,22 @@ aerial-arena/
 │   │   │   ├── freeplay/        # Solo Free Play manager (local Rapier simulation)
 │   │   │   ├── input/           # Keyboard capture & edge triggers
 │   │   │   ├── net/             # WebSocket network client & snapshot buffer
-│   │   │   ├── renderer/        # Three.js car, ball, and 3 arena themes
+│   │   │   ├── renderer/        # Arena (shared geometry), car, ball, effects, themes
 │   │   │   ├── ui/              # Accessible HUD & menu overlay
 │   │   │   └── main.ts          # Main application coordinator
 │   │   └── index.html
 │   └── server/                  # Authoritative Node.js WebSocket server
 │       ├── src/
-│       │   ├── gameRoom.ts      # 60 Hz authoritative room loop & 30 Hz broadcaster
+│       │   ├── gameRoom.ts      # Authoritative room loop (120 Hz physics) & 30 Hz broadcaster
 │       │   ├── matchmaker.ts    # Atomic 1v1 queue pairing & cancellation
 │       │   ├── server.ts        # HTTP & WebSocket server instance
 │       │   └── index.ts         # Server entry point
 │       └── test/                # Matchmaker, room, and E2E multiplayer tests
 ├── packages/
 │   ├── shared/                  # Contracts, constants, types, math helpers
-│   └── game-core/               # Physics world, car controller, ball, arena, pads, goals
-│       └── test/                # 15-scenario physics harness and match rules tests
+│   └── game-core/               # Physics world, car controller, ball, arena geometry, pads, goals
+│       ├── scripts/             # physicsProbe.ts (npm run probe:physics)
+│       └── test/                # 44-scenario physics harness and match rules tests
 ├── docs/                        # PRD and architectural specifications
 ├── PHYSICS_TUNING.md            # Physics constants, units, hypotheses, and tuning log
 └── IMPLEMENTATION_STATUS.md     # Verification gates and release tracking
@@ -128,6 +122,9 @@ npm test
 
 # Run physics tests only
 npm run test:physics
+
+# Print measured car/ball behaviour vs RL reference values
+npm run probe:physics
 ```
 
 ### 4. Run Typecheck & Production Build
@@ -146,12 +143,11 @@ npm run build
 1. Start the dev server: `npm run dev`.
 2. Open Browser Window 1 at `http://localhost:3000`.
 3. Open Browser Window 2 (or an Incognito window) at `http://localhost:3000`.
-4. In Browser 1, click **"Play Quick Match (1v1)"**.
+4. In Browser 1, click **Quick Match**.
    - Notice the status updates to *"Searching for Opponent..."* with an active elapsed timer.
-5. In Browser 2, click **"Play Quick Match (1v1)"**.
+5. In Browser 2, click **Quick Match**.
    - Both browser clients are immediately paired into the same room.
-   - Browser 1 is assigned **Blue Team** (spawns at -Z facing +Z).
-   - Browser 2 is assigned **Orange Team** (spawns at +Z facing -Z).
+   - One browser is **Blue** (defends −Z), the other **Orange** (defends +Z); both use the same random RL kickoff spawn, mirrored.
    - Both screens show the 3-second countdown ("3", "2", "1", "GO!").
 6. Drive cars using `W`, `A`, `S`, `D`, `Space` (jump), and `Left Shift` (boost).
 7. Strike the ball into the opponent's goal:
@@ -159,13 +155,65 @@ npm run build
    - The HUD updates the score by 1 point.
    - A 3-second reset pause occurs before resetting cars and ball for the next kickoff.
 8. Toggle `C` to test **Ball Cam** vs **Car Cam**.
-9. Test cancellation: click **Cancel Search** while in queue to verify atomic ticket removal.
+9. Test cancellation: click **Cancel** while in queue to verify atomic ticket removal.
 10. Test disconnect: close one tab during a live match to observe the 10-second grace countdown and subsequent forfeit result for the remaining player.
 
 ---
 
-## Production Deployment Notes
+## Playing Online
 
-- **Static Client**: The `apps/client/dist` directory produced by `npm run build` can be hosted on any static file server or CDN (e.g. Cloudflare Pages, Vercel, S3).
-- **Persistent Server**: `apps/server` requires a persistent Node.js process supporting WebSockets. Set environment variables `PORT=3001` and `HOST=0.0.0.0`.
-- **WSS Reverse Proxy**: In production with HTTPS, terminate TLS via Nginx/Caddy and proxy WebSocket traffic to port 3001 with header forwarding (`Upgrade $http_upgrade`).
+### Private match (play with a friend)
+1. Click **Private Match → Create room**. You get a 5-character code (e.g. `N4WJU`) and an invite link (`…/?room=N4WJU`).
+2. Your friend opens the invite link (the code is pre-filled) or types the code under **Join**.
+3. The match starts for both of you: host is Blue, guest is Orange. Codes are single-use and expire after 15 minutes or when the host leaves.
+
+**Quick Match** still pairs any two players who are searching at the same time.
+
+### Where to test
+| Setup | How |
+|---|---|
+| Same computer | `npm run dev`, open http://localhost:3000 in two browser windows. |
+| Same Wi-Fi / LAN | `npm run dev`, then your friend opens `http://<your LAN IP>:3000` (find it with `ipconfig`). Allow Node through Windows Firewall when asked (ports 3000 and 3001). |
+| Over the internet | Deploy (below). Tunnels like `cloudflared` also work, but the dev client expects the server on port 3001 of the same host; set `VITE_SERVER_URL` if you tunnel the two ports separately. |
+
+## Deployment
+
+The server can also serve the built game, so production is **one service on one port** (HTTP + WebSocket):
+
+```bash
+npm run build:client   # builds apps/client/dist
+npm start              # serves the game + match server on $PORT (default 3001)
+```
+
+The client finds the server automatically:
+- in dev (page on :3000), it uses `:3001`
+- when deployed, it uses the same origin (`wss://` on https)
+
+Set `VITE_SERVER_URL` at build time only if the client and server live on different domains.
+
+### Docker
+```bash
+docker build -t aerial-arena .
+docker run -p 8080:8080 aerial-arena   # then open http://localhost:8080
+```
+
+### Hosting on Render (easiest)
+`render.yaml` sets everything up: Docker build, `/health` check, and the database folder.
+1. Create a GitHub repository and push this project to it.
+2. Go to [render.com](https://render.com), sign up with GitHub, then choose **New + → Blueprint** and select the repo.
+3. Click **Apply**. Render builds the Dockerfile and gives you a URL like `https://aerial-arena.onrender.com`. Share it; invite links work there too.
+
+**Free plan limits:**
+- The service sleeps after about 15 minutes idle; the first visit then takes about a minute.
+- The disk is wiped on every deploy or restart, so **accounts and stats reset**.
+
+To keep player data, switch to a paid instance with a persistent disk (see the commented lines in `render.yaml`).
+
+Other hosts work too, if they support long-lived WebSockets and a persistent process (Railway, Fly.io, a VPS). Point them at the `Dockerfile` and set `DATA_DIR` to a persistent volume. Static/serverless hosts (Vercel, Netlify, GitHub Pages) cannot run the match server.
+
+### Accounts & data
+- Players create a username and password, or continue as a guest.
+- The server stores accounts, online wins/losses/goals, and bot results in SQLite (via sql.js, no native build) at `$DATA_DIR/aerial-arena.sqlite`.
+- Passwords are hashed with scrypt; sessions are random tokens stored as hashes.
+- Online results are recorded by the server. Bot results are reported by the client, so they don't count toward the leaderboard.
+- Run a **single instance**: matches, rooms and the database live in that one process.

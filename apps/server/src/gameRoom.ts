@@ -1,6 +1,8 @@
 import { WebSocket } from 'ws';
 import {
   ArenaTheme,
+  BALL_CONFIG,
+  GameEvent,
   GameSnapshot,
   MATCH_CONFIG,
   MatchPhase,
@@ -28,7 +30,12 @@ export interface PlayerSession {
   lastInputSeq: number;
   inputCountThisSec: number;
   lastInputSecTimestamp: number;
+  /** Wall-clock ms of the last accepted input packet. */
+  lastInputAt: number;
 }
+
+/** Inputs older than this are treated as neutral (client stalled, tab hidden, packet loss). */
+const INPUT_STALE_MS = 250;
 
 export class GameRoom {
   public readonly roomId: string;
@@ -42,8 +49,23 @@ export class GameRoom {
 
   private loopInterval?: NodeJS.Timeout;
   private snapshotSeq = 0;
+  private lastSnapshotTick = 0;
+  private pendingEvents: GameEvent[] = [];
   private isDestroyed = false;
   private onRoomClosed?: (roomId: string) => void;
+  private onMatchResult?: (winner: Team | 'forfeit_blue' | 'forfeit_orange', blueScore: number, orangeScore: number) => void;
+  private resultReported = false;
+
+  /** Report the final result exactly once (normal end or forfeit). */
+  private reportResult(winner: Team | 'forfeit_blue' | 'forfeit_orange', blue: number, orange: number): void {
+    if (this.resultReported) return;
+    this.resultReported = true;
+    try {
+      this.onMatchResult?.(winner, blue, orange);
+    } catch (err) {
+      console.error('[GameRoom] failed to record result', err);
+    }
+  }
 
   // Stored current validated inputs for next physics tick
   private currentInputs: Map<string, PlayerInput> = new Map();
@@ -53,8 +75,10 @@ export class GameRoom {
     theme: ArenaTheme,
     player1: { socketId: string; playerName: string; team: Team; token: string; ws?: WebSocket },
     player2: { socketId: string; playerName: string; team: Team; token: string; ws?: WebSocket },
-    onRoomClosed?: (roomId: string) => void
+    onRoomClosed?: (roomId: string) => void,
+    onMatchResult?: (winner: Team | 'forfeit_blue' | 'forfeit_orange', blueScore: number, orangeScore: number) => void
   ) {
+    this.onMatchResult = onMatchResult;
     this.roomId = roomId;
     this.theme = theme;
     this.createdAt = Date.now();
@@ -75,7 +99,8 @@ export class GameRoom {
     }
 
     // Start 60 Hz authoritative game loop
-    const tickIntervalMs = 1000 / MATCH_CONFIG.fixedTickRate; // ~16.67ms
+    // Wall-clock loop at 60 Hz; the simulation substeps at 120 Hz internally.
+    const tickIntervalMs = 1000 / MATCH_CONFIG.serverLoopHz;
     let lastTime = performance.now();
 
     this.loopInterval = setInterval(() => {
@@ -105,6 +130,7 @@ export class GameRoom {
       lastInputSeq: 0,
       inputCountThisSec: 0,
       lastInputSecTimestamp: Date.now(),
+      lastInputAt: 0,
     };
     this.players.set(p.token, session);
     this.socketToToken.set(p.socketId, p.token);
@@ -159,7 +185,14 @@ export class GameRoom {
       powerslide: Boolean(raw.powerslide),
     };
 
+    // A jump press must survive being coalesced with a newer packet before the
+    // simulation consumed it (the car de-duplicates jump edges by seq).
+    const prev = this.currentInputs.get(session.playerId);
+    const car = this.sim?.cars.get(session.playerId);
+    if (prev?.jump && car && car.lastInputSeq < prev.seq) sanitized.jump = true;
+
     session.lastInputSeq = raw.seq;
+    session.lastInputAt = Date.now();
     this.currentInputs.set(session.playerId, sanitized);
   }
 
@@ -170,7 +203,7 @@ export class GameRoom {
     if (this.isDestroyed) return;
 
     const ballPos = this.sim.ball.getTransform();
-    const isBallGrounded = ballPos.y <= 1.9; // Ball resting on floor
+    const isBallGrounded = ballPos.y <= BALL_CONFIG.restHeight + 0.05; // ball touching the floor
 
     // Controls locked during countdown, goal pause, or match end
     const locked = this.sm.phase === 'countdown' ||
@@ -179,14 +212,23 @@ export class GameRoom {
                    this.sm.phase === 'ended';
 
     const effectiveInputs = new Map<string, PlayerInput>();
-    if (!locked) {
-      for (const [id, input] of this.currentInputs.entries()) {
-        effectiveInputs.set(id, input);
+    if (locked) {
+      // Presses made during a countdown/pause must not fire a jump the instant play resumes.
+      for (const input of this.currentInputs.values()) input.jump = false;
+    } else {
+      const now = Date.now();
+      for (const session of this.players.values()) {
+        const input = this.currentInputs.get(session.playerId);
+        // A stalled client must not keep driving with its last held keys.
+        if (input && session.connected && now - session.lastInputAt <= INPUT_STALE_MS) {
+          effectiveInputs.set(session.playerId, input);
+        }
       }
     }
 
     // Step physics
-    const { goalEvent } = this.sim.step(effectiveInputs, dt);
+    const { goalEvent, events: simEvents } = this.sim.step(effectiveInputs, dt);
+    this.pendingEvents.push(...simEvents.filter((e) => e.type !== 'padPickup'));
 
     // Update match state machine
     const events = this.sm.update(dt, isBallGrounded, goalEvent);
@@ -220,14 +262,16 @@ export class GameRoom {
           blueScore: event.blueScore,
           orangeScore: event.orangeScore,
         });
+        this.reportResult(event.winner!, event.blueScore, event.orangeScore);
 
         // Schedule room cleanup 10s after end
         setTimeout(() => this.destroy(), 10000);
       }
     }
 
-    // Broadcast snapshot at 30 Hz (every 2 physics ticks)
-    if (this.sim.tickCount % MATCH_CONFIG.snapshotIntervalTicks === 0) {
+    // Broadcast snapshots at ~30 Hz (every snapshotIntervalTicks physics ticks)
+    if (this.sim.tickCount - this.lastSnapshotTick >= MATCH_CONFIG.snapshotIntervalTicks) {
+      this.lastSnapshotTick = this.sim.tickCount;
       this.broadcastSnapshot();
     }
   }
@@ -254,6 +298,7 @@ export class GameRoom {
       ball: { transform: this.sim.ball.getTransform() },
       pads: this.sim.pads.getSnapshots(),
       lastScorer: this.sm.lastScorer,
+      events: this.pendingEvents.length > 0 ? this.pendingEvents.splice(0) : undefined,
     };
 
     this.broadcast({ type: 'game/snapshot', snapshot });
@@ -306,6 +351,7 @@ export class GameRoom {
               orangeScore: event.orangeScore,
               reason: `Player ${session.playerName} disconnected and timed out`,
             });
+            this.reportResult(event.winner!, event.blueScore, event.orangeScore);
           }
         }
         setTimeout(() => this.destroy(), 3000);

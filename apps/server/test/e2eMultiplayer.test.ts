@@ -65,8 +65,8 @@ describe('E2E Two-Client Real-Time Multiplayer Integration', () => {
       expect(matched1.roomId).toBe(matched2.roomId);
       expect(matched1.team).toBe('blue');
       expect(matched2.team).toBe('orange');
-      expect(matched1.opponentName).toBe('Player2');
-      expect(matched2.opponentName).toBe('Player1');
+      expect(matched1.opponentName).toBe('Player2 (guest)');
+      expect(matched2.opponentName).toBe('Player1 (guest)');
     }
 
     // Both clients send drive inputs

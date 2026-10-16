@@ -107,4 +107,34 @@ describe('GameRoom Authoritative Simulation Tests', () => {
     room.destroy();
     expect(closedCalled).toBe(true);
   });
+  it('treats a stalled client (no input for >250 ms) as neutral instead of replaying held keys', async () => {
+    room = new GameRoom(
+      'room-stale',
+      'coastal_dome',
+      { socketId: 's1', playerName: 'P1', team: 'blue', token: 'tok-1' },
+      { socketId: 's2', playerName: 'P2', team: 'orange', token: 'tok-2' }
+    );
+    await room.initialize();
+    const internals = room as unknown as {
+      loopInterval?: NodeJS.Timeout;
+      sm: { update(dt: number, ballGrounded: boolean): unknown };
+      sim: { cars: Map<string, { getTransform(): { vz: number } }> };
+      tick(dt: number): void;
+    };
+    clearInterval(internals.loopInterval); // drive ticks manually
+    internals.sm.update(3.1, false); // skip the kickoff countdown
+
+    room.handleInput('s1', {
+      seq: 1, timestamp: Date.now(), throttle: 1, steer: 0, pitch: 0, yaw: 0, roll: 0,
+      jump: false, jumpHeld: false, boost: true, powerslide: false,
+    });
+    for (let i = 0; i < 30; i++) internals.tick(1 / 60);
+    const car = internals.sim.cars.get('s1')!;
+    const vDriving = car.getTransform().vz;
+    expect(vDriving).toBeGreaterThan(5);
+
+    room.getPlayerBySocket('s1')!.lastInputAt = Date.now() - 1000; // client went silent
+    for (let i = 0; i < 30; i++) internals.tick(1 / 60);
+    expect(car.getTransform().vz).toBeLessThan(vDriving); // coasting, not boosting
+  });
 });

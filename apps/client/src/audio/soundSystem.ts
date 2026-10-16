@@ -126,12 +126,18 @@ export class SoundSystem {
 
   private stopBoostRoar(): void {
     if (!this.ctx || !this.boostGain || !this.boostNoise) return;
-    this.boostGain.gain.linearRampToValueAtTime(0.001, this.ctx.currentTime + 0.15);
+    // Capture this roar's nodes: a quick re-tap starts new nodes that must not be stopped here.
+    const noise = this.boostNoise;
+    const gain = this.boostGain;
+    this.boostNoise = null;
+    gain.gain.cancelScheduledValues(this.ctx.currentTime);
+    gain.gain.setValueAtTime(gain.gain.value, this.ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.001, this.ctx.currentTime + 0.15);
     setTimeout(() => {
-      this.boostNoise?.stop();
-      this.boostNoise?.disconnect();
-      this.boostNoise = null;
-    }, 150);
+      noise.stop();
+      noise.disconnect();
+      gain.disconnect();
+    }, 160);
   }
 
   public playJump(): void {
